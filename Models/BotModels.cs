@@ -27,7 +27,13 @@
         WaitingForManualSearchQuery,
         WaitingForManualReturnSearchQuery,
         WaitingForAddBookExchangeStatus, // Новий
-        WaitingForEditBookExchangeStatus // Новий
+        WaitingForEditBookExchangeStatus,
+        WaitingForBorrowPeriod,
+        WaitingForBorrowRealName,        // НОВЕ: Очікуємо справжнє ім'я
+        WaitingForBorrowContactMethod,   // НОВЕ: Очікуємо натискання кнопки зв'язку
+        WaitingForBorrowContactInput,
+        WaitingForAddBookQuantity,
+        WaitingForEditBookQuantity,
     }
 
     public class ManualBorrowingSession
@@ -35,11 +41,15 @@
         public string? BookId { get; set; }
         public string? ReaderName { get; set; }
         public string? ReaderContact { get; set; }
+
     }
 
     public class UserBorrowingSession
     {
         public string? BookTitle { get; set; }
+        public string? RealName { get; set; }        // НОВЕ
+        public string? ContactMethod { get; set; }   // НОВЕ
+        public string? Contact { get; set; }         // НОВЕ
     }
 
     public enum RequestType
@@ -50,13 +60,15 @@
 
     public class PendingRequest
     {
-        public string RequestId { get; set; } = Guid.NewGuid().ToString("N").Substring(0, 8); // Коротка унікальна ID
+        public string RequestId { get; set; } = Guid.NewGuid().ToString("N").Substring(0, 8);
         public RequestType Type { get; set; }
         public long UserId { get; set; }
-        public string UserName { get; set; } = "";
+        public string UserName { get; set; } = ""; // Тут буде суто Telegram-нікнейм
+        public string RealName { get; set; } = ""; // ДОДАЛИ: Окреме поле для справжнього імені
         public string? Contact { get; set; }
         public string BookTitle { get; set; } = "";
         public int CatalogRowIndex { get; set; }
+        public int BorrowDays { get; set; }
     }
     public class AdminBookSession
     {
@@ -66,6 +78,9 @@
         public string? Genre { get; set; }
         public string? Status { get; set; } // "Доступна" або "Читають"
         public string? ExchangeStatus { get; set; } // Нове поле: "Так" або "Ні"
+        public int Quantity { get; set; }
+        public int CurrentAvailable { get; set; } // <--- ДОДАЙ ЦЕ
+        public int CurrentTotal { get; set; }
     }
     public class AdminExchangeSession
     {

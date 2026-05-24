@@ -15,6 +15,7 @@ namespace LibraryBot
         static async Task Main(string[] args)
         {
             Env.Load();
+            SessionManager.LoadAdminsFromEnv();
             string botToken = Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN") ?? "";
 
             GoogleSheetsService.Initialize();
@@ -34,6 +35,7 @@ namespace LibraryBot
                 cancellationToken: cts.Token
             );
 
+            DailyReminderService.Start(botClient, cts.Token);
             var me = await botClient.GetMe();
             Console.WriteLine($"BOT @{me.Username} SUCCESFULY LAUNCH!");
             Console.WriteLine("ENTER TO STOP...");

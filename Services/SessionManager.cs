@@ -5,11 +5,24 @@ namespace LibraryBot.Services
 {
     public static class SessionManager
     {
-        public static readonly HashSet<long> AdminIds = new()
+        public static readonly HashSet<long> AdminIds = new();
+
+        // Додаємо метод для завантаження адмінів
+        public static void LoadAdminsFromEnv()
         {
-            973920888,
-            6009402319
-        };
+            string? adminIdsStr = Environment.GetEnvironmentVariable("ADMIN_IDS");
+            if (!string.IsNullOrWhiteSpace(adminIdsStr))
+            {
+                var ids = adminIdsStr.Split(',');
+                foreach (var idStr in ids)
+                {
+                    if (long.TryParse(idStr.Trim(), out long id))
+                    {
+                        AdminIds.Add(id);
+                    }
+                }
+            }
+        }
 
         public static readonly ConcurrentDictionary<long, AdminBookSession> AdminBookSessions = new();
         public static readonly ConcurrentDictionary<string, PendingRequest> PendingRequests = new();

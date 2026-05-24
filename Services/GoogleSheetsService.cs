@@ -1,11 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
-using Google.Apis.Auth.OAuth2;
+﻿using Google.Apis.Auth.OAuth2;
 using Google.Apis.Services;
 using Google.Apis.Sheets.v4;
 using Google.Apis.Sheets.v4.Data;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Threading.Tasks;
+using System.Linq;
 
 namespace LibraryBot.Services
 {
@@ -13,16 +15,15 @@ namespace LibraryBot.Services
     {
         static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
         static readonly string ApplicationName = "LibraryBot";
-        // ID твоєї таблиці з посилання
-        static readonly string SpreadsheetId = "114FuoP5i-8l2lLwekmqPf3hx1q0Rc0AxZvTek6ZWhmk";
+        public static string SpreadsheetId { get; private set; } = "";
         static SheetsService? _service;
 
-        // Ініціалізація підключення
         public static void Initialize()
         {
-            GoogleCredential credential;
+            SpreadsheetId = Environment.GetEnvironmentVariable("SPREADSHEET_ID")
+                ?? throw new Exception("Помилка: SPREADSHEET_ID не знайдено в .env файлі!");
 
-            // Зчитуємо файл з ключами, який ти завантажив
+            GoogleCredential credential;
             using (var stream = new FileStream("credentials.json", FileMode.Open, FileAccess.Read))
             {
                 credential = GoogleCredential.FromStream(stream).CreateScoped(Scopes);
@@ -37,14 +38,11 @@ namespace LibraryBot.Services
             Console.WriteLine("Google Sheets connected!");
         }
 
-        // Метод для отримання списку книг
-        public static async Task<IList<IList<object>>> GetBooksAsync()
+        // Беремо 6 колонок (до F)
+        public static async Task<IList<IList<object>>?> GetBooksAsync()
         {
-            // УВАГА: Заміни "Каталог" на назву твого аркуша з книгами, якщо ти його перейменував (наприклад, "Каталог")
-            // A2:E означає, що ми беремо дані з колонок від A до E, починаючи з 2-го рядка (без заголовків)
-            string range = "Каталог!A2:E";
-
-            SpreadsheetsResource.ValuesResource.GetRequest request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+            string range = "Каталог!A2:F";
+            SpreadsheetsResource.ValuesResource.GetRequest request = _service!.Spreadsheets.Values.Get(SpreadsheetId, range);
 
             try
             {
@@ -58,81 +56,69 @@ namespace LibraryBot.Services
             }
         }
 
-        // Метод для запису нової видачі в таблицю
-        public static async Task AddBorrowingAsync(string bookTitle, string telegramName, string contact)
+        public static async Task AddBorrowingAsync(string bookTitle, string realName, string telegramName, string contact, long chatId, DateTime dueDate)
         {
-            // Вказуємо, що дописуємо дані на аркуш "Видачі"
-            string range = "Видачі!A:D";
-
-            // Формуємо рядок з даними
+            string range = "Видачі!A:I";
             var valueRange = new ValueRange();
-            var rowList = new List<object> { bookTitle, telegramName, contact, DateTime.Now.ToString("dd.MM.yyyy HH:mm") };
+
+            var rowList = new List<object>
+            {
+                bookTitle, realName, telegramName, contact,
+                DateTime.Now.ToString("dd.MM.yyyy HH:mm"), "",
+                chatId.ToString(), dueDate.ToString("dd.MM.yyyy"), ""
+            };
             valueRange.Values = new List<IList<object>> { rowList };
 
-            // Створюємо запит на додавання (Append)
             var appendRequest = _service!.Spreadsheets.Values.Append(valueRange, SpreadsheetId, range);
             appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
-
-            try
-            {
-                await appendRequest.ExecuteAsync();
-                Console.WriteLine($"Записано в таблицю: {bookTitle} взяв {telegramName}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Помилка запису в таблицю: {ex.Message}");
-            }
+            try { await appendRequest.ExecuteAsync(); } catch (Exception ex) { Console.WriteLine($"Помилка: {ex.Message}"); }
         }
 
-        // Метод для оновлення статусу книги в каталозі
+        // Адаптер для ручної видачі (щоб не ламати старий код)
         public static async Task UpdateBookStatusAsync(string bookTitle, string newStatus)
         {
-            // 1. Спочатку отримуємо весь список, щоб знайти на якому рядку ця книга
+            int delta = newStatus.Equals("Доступна", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
             var books = await GetBooksAsync();
             if (books == null) return;
 
-            int rowIndex = -1;
             for (int i = 0; i < books.Count; i++)
             {
-                // Перевіряємо першу колонку (Назва). Порівнюємо без урахування регістру
-                if (books[i].Count > 0 &&
-                    books[i][0]?.ToString()?.Equals(bookTitle, StringComparison.OrdinalIgnoreCase) == true)
+                if (books[i].Count > 0 && books[i][0]?.ToString()?.Equals(bookTitle, StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    // +2 тому, що масив починається з 0, а дані в таблиці ми зчитуємо з 2-го рядка (бо 1-й це шапка)
-                    rowIndex = i + 2;
+                    await ChangeAvailableCountAsync(i + 2, delta);
                     break;
                 }
             }
-
-            if (rowIndex == -1)
-            {
-                Console.WriteLine($"Книгу '{bookTitle}' не знайдено в каталозі для оновлення статусу.");
-                return;
-            }
-
-            // 2. Вказуємо конкретну клітинку для оновлення. 
-            // УВАГА: Якщо Статус у тебе не в колонці D, зміни літеру тут (наприклад, "Каталог!E{rowIndex}")
-            string range = $"Каталог!D{rowIndex}";
-
-            var valueRange = new ValueRange();
-            valueRange.Values = new List<IList<object>> { new List<object> { newStatus } };
-
-            // Створюємо запит на оновлення (Update замість Append)
-            var updateRequest = _service!.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
-            updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
-
-            try
-            {
-                await updateRequest.ExecuteAsync();
-                Console.WriteLine($"Статус книги '{bookTitle}' успішно змінено на '{newStatus}'.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Помилка оновлення статусу в таблиці: {ex.Message}");
-            }
         }
 
-        // Метод для перевірки наявності та статусу книги
+        // Математична зміна кількості (Головний рушій)
+        public static async Task<bool> ChangeAvailableCountAsync(int rowIndex, int delta)
+        {
+            string range = $"Каталог!E{rowIndex}";
+            var request = _service!.Spreadsheets.Values.Get(SpreadsheetId, range);
+            try
+            {
+                var response = await request.ExecuteAsync();
+                int currentAvailable = 0;
+                if (response.Values != null && response.Values.Count > 0)
+                {
+                    int.TryParse(response.Values[0][0]?.ToString(), out currentAvailable);
+                }
+
+                int newAvailable = currentAvailable + delta;
+                if (newAvailable < 0) newAvailable = 0;
+
+                var valueRange = new ValueRange();
+                valueRange.Values = new List<IList<object>> { new List<object> { newAvailable } };
+
+                var updateRequest = _service.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
+                updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+                await updateRequest.ExecuteAsync();
+                return true;
+            }
+            catch (Exception ex) { Console.WriteLine($"Помилка зміни кількості: {ex.Message}"); return false; }
+        }
+
         public static async Task<(bool exists, bool isAvailable)> CheckBookAvailabilityAsync(string bookTitle)
         {
             var books = await GetBooksAsync();
@@ -140,29 +126,19 @@ namespace LibraryBot.Services
 
             foreach (var row in books)
             {
-                // Перевіряємо збіг назви (Колонка A, індекс 0)
                 if (row.Count > 0 && row[0]?.ToString()?.Equals(bookTitle.Trim(), StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    // Беремо статус з Колонки D (індекс 3). Якщо колонки немає, вважаємо статус порожнім
-                    string status = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "" : "";
-
-                    // Книга доступна, якщо статус порожній або явно вказано "Доступна"
-                    // Якщо там "На руках" або "Не обмінюється" - поверне false
-                    bool isAvailable = string.IsNullOrWhiteSpace(status) || status.Equals("Доступна", StringComparison.OrdinalIgnoreCase);
-
-                    return (true, isAvailable);
+                    int available = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
+                    return (true, available > 0);
                 }
             }
-
-            // Якщо цикл закінчився і ми нічого не знайшли
             return (false, false);
         }
 
-        // Метод для фіксації дати повернення книги в журналі видач
-        public static async Task LogReturnDateAsync(string bookTitle)
+        // ВИПРАВЛЕНО: Додано параметр chatId!
+        public static async Task LogReturnDateAsync(string bookTitle, long? chatId = null)
         {
-            // Зчитуємо дані з аркуша "Видачі" (колонки від A до E)
-            string range = "Видачі!A2:E";
+            string range = "Видачі!A2:G";
             var request = _service!.Spreadsheets.Values.Get(SpreadsheetId, range);
 
             try
@@ -173,14 +149,19 @@ namespace LibraryBot.Services
 
                 for (int i = 0; i < rows.Count; i++)
                 {
-                    // Шукаємо рядок, де збігається назва книги (індекс 0)
                     if (rows[i].Count > 0 && rows[i][0]?.ToString()?.Equals(bookTitle, StringComparison.OrdinalIgnoreCase) == true)
                     {
-                        // Перевіряємо, чи колонка E (індекс 4) порожня або взагалі відсутня в цьому рядку
-                        if (rows[i].Count <= 4 || string.IsNullOrWhiteSpace(rows[i][4]?.ToString()))
+                        bool matchChatId = true;
+                        if (chatId.HasValue)
                         {
-                            int rowIndex = i + 2; // Переводимо індекс масиву в номер рядка Excel
-                            string updateRange = $"Видачі!E{rowIndex}";
+                            string rowChatId = rows[i].Count > 6 ? rows[i][6]?.ToString() ?? "" : "";
+                            if (rowChatId != chatId.Value.ToString()) matchChatId = false;
+                        }
+
+                        if (matchChatId && (rows[i].Count <= 5 || string.IsNullOrWhiteSpace(rows[i][5]?.ToString())))
+                        {
+                            int rowIndex = i + 2;
+                            string updateRange = $"Видачі!F{rowIndex}";
 
                             var valueRange = new ValueRange();
                             valueRange.Values = new List<IList<object>> { new List<object> { DateTime.Now.ToString("dd.MM.yyyy HH:mm") } };
@@ -189,24 +170,18 @@ namespace LibraryBot.Services
                             updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
 
                             await updateRequest.ExecuteAsync();
-                            Console.WriteLine($"Зафіксовано дату повернення для книги: {bookTitle}");
-                            break; // Перериваємо цикл, бо закрили поточну видачу
+                            break;
                         }
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Помилка фіксації дати повернення: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine($"Помилка повернення: {ex.Message}"); }
         }
 
         public static async Task<List<(string Title, int CatalogRowIndex)>> GetUserBorrowedBooksAsync(string telegramName)
         {
             var result = new List<(string Title, int CatalogRowIndex)>();
-
-            // 1. Зчитуємо всі записи з аркуша "Видачі"
-            string rangeBorrow = "Видачі!A2:E";
+            string rangeBorrow = "Видачі!A2:F";
             var requestBorrow = _service!.Spreadsheets.Values.Get(SpreadsheetId, rangeBorrow);
             ValueRange responseBorrow;
 
@@ -216,23 +191,19 @@ namespace LibraryBot.Services
             var borrowRows = responseBorrow.Values;
             if (borrowRows == null) return result;
 
-            // 2. Зчитуємо весь каталог книг для пошуку індексів
             var catalogBooks = await GetBooksAsync();
             if (catalogBooks == null) return result;
 
-            // Шукаємо активні видачі для конкретного користувача
             foreach (var row in borrowRows)
             {
-                if (row.Count > 1)
+                if (row.Count > 2)
                 {
                     string rowTitle = row[0]?.ToString() ?? "";
-                    string rowUser = row[1]?.ToString() ?? "";
-                    string returnDate = row.Count > 4 ? row[4]?.ToString() ?? "" : "";
+                    string rowUser = row[2]?.ToString() ?? "";
+                    string returnDate = row.Count > 5 ? row[5]?.ToString() ?? "" : "";
 
-                    // Якщо ім'я збігається і книга ще не повернута (пуста дата повернення)
-                    if (rowUser.Equals(telegramName, StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(returnDate))
+                    if (rowUser.Contains(telegramName, StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(returnDate))
                     {
-                        // Знаходимо рядок цієї книги в основному каталозі
                         int catalogRowIndex = -1;
                         for (int i = 0; i < catalogBooks.Count; i++)
                         {
@@ -242,46 +213,46 @@ namespace LibraryBot.Services
                                 break;
                             }
                         }
-
-                        if (catalogRowIndex != -1)
-                        {
-                            result.Add((rowTitle, catalogRowIndex));
-                        }
+                        if (catalogRowIndex != -1) result.Add((rowTitle, catalogRowIndex));
                     }
                 }
             }
             return result;
         }
 
-        // Додавання нової книги
-        public static async Task AddBookToCatalogAsync(string title, string author, string genre, string status, string exchangeStatus)
+        // АДАПТЕР: Ігноруємо старий статус, пишемо 1 Доступно і 1 Всього
+        // АДАПТЕР: Додано параметр quantity (за замовчуванням 1)
+        public static async Task AddBookToCatalogAsync(string title, string author, string genre, string status, string exchangeStatus, int quantity = 1)
         {
-            string range = "Каталог!A:A";
+            string range = "Каталог!A:F";
             var valueRange = new ValueRange();
 
-            var rowList = new List<object> { title, author, genre, status, exchangeStatus };
+            // Записуємо кількість у колонки E (Доступно) та F (Всього)
+            var rowList = new List<object> { title, author, genre, exchangeStatus, quantity, quantity };
             valueRange.Values = new List<IList<object>> { rowList };
 
             var appendRequest = _service!.Spreadsheets.Values.Append(valueRange, SpreadsheetId, range);
             appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
             appendRequest.InsertDataOption = SpreadsheetsResource.ValuesResource.AppendRequest.InsertDataOptionEnum.INSERTROWS;
-
             try { await appendRequest.ExecuteAsync(); } catch { }
-        }        // Edit книги
-                 // Edit книги (додано exchangeStatus та розширено діапазон до E)
-        public static async Task<bool> UpdateBookInCatalogAsync(int rowIndex, string title, string author, string genre, string status, string exchangeStatus)
+        }
+        // АДАПТЕР: Оновлюємо тільки перші 4 колонки (щоб не стерти цифри)
+        // Оновлений метод редагування книги (записує всі 6 колонок)
+        public static async Task<bool> UpdateBookInCatalogAsync(int rowIndex, string title, string author, string genre, string exchangeStatus, int available, int total)
         {
-            string range = $"Каталог!A{rowIndex}:E{rowIndex}";
+            string range = $"Каталог!A{rowIndex}:F{rowIndex}";
 
             var valueRange = new ValueRange();
-            valueRange.Values = new List<IList<object>> { new List<object> { title, author, genre, status, exchangeStatus } };
+            // Передаємо оновлені текстові поля та прораховані цифри кількості
+            valueRange.Values = new List<IList<object>> { new List<object> { title, author, genre, exchangeStatus, available, total } };
 
             var updateRequest = _service!.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
             updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
 
             try { await updateRequest.ExecuteAsync(); return true; }
             catch { return false; }
-        }        // Видалення книги
+        }
+        // Фізичне видалення рядка з таблиці (зі зсувом догори)
         public static async Task<bool> DeleteBookFromCatalogAsync(string title)
         {
             var books = await GetBooksAsync();
@@ -291,27 +262,50 @@ namespace LibraryBot.Services
             {
                 if (books[i].Count > 0 && books[i][0]?.ToString()?.Equals(title, StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    int rowIndex = i + 2;
-                    string range = $"Каталог!A{rowIndex}:E{rowIndex}";
-
-                    var valueRange = new ValueRange();
-                    // Записуємо порожні значення замість тексту
-                    valueRange.Values = new List<IList<object>> { new List<object> { "", "", "", "", "" } };
-                    var updateRequest = _service.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
-                    updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+                    int rowIndex = i + 2; // +2, бо індекс i починається з 0, а перший рядок — це заголовки
 
                     try
                     {
-                        await updateRequest.ExecuteAsync();
+                        // 1. Отримуємо внутрішній ID аркуша "Каталог" (SheetId), оскільки API видалення працює саме за ним
+                        var spreadsheet = await _service!.Spreadsheets.Get(SpreadsheetId).ExecuteAsync();
+                        var sheet = spreadsheet.Sheets.FirstOrDefault(s => s.Properties.Title == "Каталог");
+                        if (sheet == null) return false;
+
+                        int sheetId = sheet.Properties.SheetId ?? 0;
+
+                        // 2. Формуємо запит на повне видалення рядка
+                        var deleteRequest = new Request
+                        {
+                            DeleteDimension = new DeleteDimensionRequest
+                            {
+                                Range = new DimensionRange
+                                {
+                                    SheetId = sheetId,
+                                    Dimension = "ROWS",
+                                    StartIndex = rowIndex - 1, // API використовує індексацію з 0 (тому віднімаємо 1)
+                                    EndIndex = rowIndex        // EndIndex не включається, тому видалиться рівно 1 рядок
+                                }
+                            }
+                        };
+
+                        var batchUpdateRequest = new BatchUpdateSpreadsheetRequest
+                        {
+                            Requests = new List<Request> { deleteRequest }
+                        };
+
+                        // 3. Виконуємо запит
+                        await _service.Spreadsheets.BatchUpdate(batchUpdateRequest, SpreadsheetId).ExecuteAsync();
                         return true;
                     }
-                    catch { return false; }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Помилка повного видалення рядка: {ex.Message}");
+                        return false;
+                    }
                 }
             }
-            return false; // Якщо книгу не знайдено
+            return false;
         }
-
-        // Фіксація обміну в журналі
         public static async Task AddExchangeLogAsync(string oldTitle, string newTitle, string telegramName)
         {
             string range = "Обмін!A:D";
@@ -324,6 +318,82 @@ namespace LibraryBot.Services
             appendRequest.InsertDataOption = SpreadsheetsResource.ValuesResource.AppendRequest.InsertDataOptionEnum.INSERTROWS;
             try { await appendRequest.ExecuteAsync(); } catch { }
         }
+
+        public static async Task<IList<IList<object>>?> GetAllBorrowingsAsync()
+        {
+            string range = "Видачі!A2:I";
+            var request = _service!.Spreadsheets.Values.Get(SpreadsheetId, range);
+            try { var response = await request.ExecuteAsync(); return response.Values; }
+            catch (Exception ex) { Console.WriteLine($"Помилка читання: {ex.Message}"); return null; }
+        }
+
+        public static async Task<bool> ExtendBorrowingAsync(int rowIndex)
+        {
+            var request = _service!.Spreadsheets.Values.Get(SpreadsheetId, $"Видачі!H{rowIndex}");
+            try
+            {
+                var response = await request.ExecuteAsync();
+                if (response.Values == null || response.Values.Count == 0) return false;
+
+                string currentDueStr = response.Values[0][0]?.ToString() ?? "";
+                if (DateTime.TryParseExact(currentDueStr, "dd.MM.yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dueDate))
+                {
+                    DateTime newDueDate = dueDate.AddDays(30);
+                    string updateRange = $"Видачі!H{rowIndex}:I{rowIndex}";
+                    var valueRange = new ValueRange();
+                    valueRange.Values = new List<IList<object>> { new List<object> { newDueDate.ToString("dd.MM.yyyy"), "Так" } };
+
+                    var updateRequest = _service!.Spreadsheets.Values.Update(valueRange, SpreadsheetId, updateRange);
+                    updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+
+                    await updateRequest.ExecuteAsync();
+                    return true;
+                }
+                return false;
+            }
+            catch (Exception ex) { Console.WriteLine($"Помилка подовження: {ex.Message}"); return false; }
+        }
+        // Обробка старої книги при обміні (віднімаємо кількість або видаляємо рядок)
+        public static async Task<bool> ProcessExchangeOutgoingBookAsync(string title)
+        {
+            var books = await GetBooksAsync();
+            if (books == null) return false;
+
+            for (int i = 0; i < books.Count; i++)
+            {
+                if (books[i].Count > 0 && books[i][0]?.ToString()?.Equals(title, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    int rowIndex = i + 2;
+                    // Зчитуємо поточну кількість
+                    int disponible = books[i].Count > 4 ? int.TryParse(books[i][4]?.ToString(), out int d) ? d : 0 : 0;
+                    int total = books[i].Count > 5 ? int.TryParse(books[i][5]?.ToString(), out int t) ? t : 1 : 1;
+
+                    if (total > 1)
+                    {
+                        // Якщо книг більше 1, зменшуємо кількість на 1 (і Доступно, і Всього)
+                        int newDisponible = Math.Max(0, disponible - 1);
+                        int newTotal = total - 1;
+
+                        string range = $"Каталог!E{rowIndex}:F{rowIndex}";
+                        var valueRange = new ValueRange();
+                        valueRange.Values = new List<IList<object>> { new List<object> { newDisponible, newTotal } };
+
+                        var updateRequest = _service!.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
+                        updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+
+                        try { await updateRequest.ExecuteAsync(); return true; }
+                        catch { return false; }
+                    }
+                    else
+                    {
+                        // Якщо копія була єдина — повністю видаляємо рядок зі зсувом
+                        return await DeleteBookFromCatalogAsync(title);
+                    }
+                }
+            }
+            return false;
+        }
+
 
 
     }

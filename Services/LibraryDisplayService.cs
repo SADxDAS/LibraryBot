@@ -25,9 +25,7 @@ namespace LibraryBot.Services
                 return;
             }
 
-            int pageSize = 10; // Кількість книг на одній сторінці
-
-            // Фільтруємо порожні рядки, щоб каталог не "ламався"
+            int pageSize = 10;
             var validBooks = books.Select((b, i) => new { RowData = b, ActualIndex = i + 2 })
                                   .Where(b => b.RowData.Count > 0 && !string.IsNullOrWhiteSpace(b.RowData[0]?.ToString()))
                                   .ToList();
@@ -39,13 +37,11 @@ namespace LibraryBot.Services
 
             var pageBooks = validBooks.Skip(pageIndex * pageSize).Take(pageSize).ToList();
 
-            // Формуємо красиву "шапку" каталогу
             string text = $"📚 <b>КАТАЛОГ КНИГ</b> (Сторінка {pageIndex + 1} з {totalPages})\n";
             text += "➖➖➖➖➖➖➖➖➖➖\n\n";
 
             var buttons = new List<InlineKeyboardButton[]>();
 
-            // Додаємо кожну книгу з красивим форматуванням
             foreach (var item in pageBooks)
             {
                 var row = item.RowData;
@@ -53,21 +49,28 @@ namespace LibraryBot.Services
                 string title = row.Count > 0 ? row[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = row.Count > 1 ? row[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
                 string genre = row.Count > 2 ? row[2]?.ToString() ?? "Не вказано" : "Не вказано";
-                string status = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Доступна" : "Доступна";
-                string exchange = row.Count > 4 ? row[4]?.ToString()?.Trim() ?? "Так" : "Так"; // Колонка E
+                string exchange = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так"; // Індекс 3 (D)
 
-                bool isAvailable = status.Equals("Доступна", StringComparison.OrdinalIgnoreCase);
+                // Зчитуємо кількість
+                int disponible = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
+                int total = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int t) ? t : 1 : 1;
+                int reading = total - disponible;
+
+                bool isAvailable = disponible > 0;
                 string statusIcon = isAvailable ? "🟢" : "🔴";
                 string exchangeTag = exchange.Equals("Ні", StringComparison.OrdinalIgnoreCase) ? " <i>(Не обмінюється)</i>" : "";
+
+                string statusText = total > 1
+                    ? $"Доступно {disponible} | Читають {reading}"
+                    : (disponible > 0 ? "Доступна" : "Читають");
 
                 text += $"📖 <b>{title}</b>\n";
                 text += $"👤 <i>Автор: {author}</i>\n";
                 text += $"🎭 Жанр: {genre}\n";
-                text += $"📊 Статус: {statusIcon} <b>{status}</b>{exchangeTag}\n";
+                text += $"📊 Статус: {statusIcon} <b>{statusText}</b>{exchangeTag}\n";
                 text += "〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n";
             }
 
-            // Блок навігації (тільки перегортання сторінок та закриття)
             var navButtons = new List<InlineKeyboardButton>();
             if (pageIndex > 0) navButtons.Add(InlineKeyboardButton.WithCallbackData("⬅️ Назад", $"page_{pageIndex - 1}"));
             navButtons.Add(InlineKeyboardButton.WithCallbackData("🔢 Сторінка", "jump_page"));
@@ -78,16 +81,12 @@ namespace LibraryBot.Services
 
             var keyboard = new InlineKeyboardMarkup(buttons);
 
-            // Відправляємо або оновлюємо повідомлення
             if (messageIdToEdit.HasValue)
-            {
-                await botClient.EditMessageText(chatId, messageIdToEdit.Value, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
-            }
+                await botClient.EditMessageText(chatId, messageIdToEdit.Value, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             else
-            {
-                await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
-            }
+                await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
         }
+
         public static async Task SearchBooksAsync(ITelegramBotClient botClient, long chatId, string query, string telegramName, CancellationToken cancellationToken)
         {
             var books = await GoogleSheetsService.GetBooksAsync();
@@ -118,7 +117,6 @@ namespace LibraryBot.Services
             }
 
             await botClient.SendMessage(chatId, $"🔍 Знайдено книг: {foundBooks.Count}. Ось результати:", cancellationToken: cancellationToken);
-            // Отримуємо список книг, які зараз на руках у цього користувача
             var userBorrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(telegramName);
             var userBorrowedRowIndexes = userBorrowedBooks.Select(b => b.CatalogRowIndex).ToHashSet();
 
@@ -127,41 +125,47 @@ namespace LibraryBot.Services
                 string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
                 string genre = item.Data.Count > 2 ? item.Data[2]?.ToString() ?? "Не вказано" : "Не вказано";
-                string status = item.Data.Count > 3 ? item.Data[3]?.ToString()?.Trim() ?? "" : "";
 
-                bool isAvailable = string.IsNullOrWhiteSpace(status) || status.Equals("Доступна", StringComparison.OrdinalIgnoreCase);
-                string statusIcon = isAvailable ? "🟢 Доступна" : "🔴 Читають"; // Було "На руках"
+                int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
+                int total = item.Data.Count > 5 ? int.TryParse(item.Data[5]?.ToString(), out int t) ? t : 1 : 1;
+                int reading = total - disponible;
 
-                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n🎭 Жанр: {genre}\n📊 Статус: {statusIcon}";
+                bool isAvailable = disponible > 0;
+                string statusIcon = isAvailable ? "🟢" : "🔴";
 
-                InlineKeyboardMarkup? keyboard = null;
+                string statusText = total > 1
+                    ? $"Доступно {disponible} | Читають {reading}"
+                    : (disponible > 0 ? "Доступна" : "Читають");
 
+                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n🎭 Жанр: {genre}\n📊 Статус: {statusIcon} {statusText}";
+
+                var keyboardButtons = new List<InlineKeyboardButton[]>();
+
+                // Якщо є вільні примірники — даємо можливість взяти
                 if (isAvailable)
                 {
-                    // Якщо доступна — кнопку бачать усі
-                    var button = InlineKeyboardButton.WithCallbackData("📥 Взяти книгу", $"act_b_{item.RowIndex}");
-                    keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
+                    keyboardButtons.Add(new[] { InlineKeyboardButton.WithCallbackData($"📥 Взяти книгу (Доступно: {disponible})", $"act_b_{item.RowIndex}") });
                 }
-                else if (userBorrowedRowIndexes.Contains(item.RowIndex))
+
+                // Якщо користувач має цю книгу на руках — даємо можливість повернути
+                if (userBorrowedRowIndexes.Contains(item.RowIndex))
                 {
-                    // Якщо недоступна, АЛЕ її взяв саме цей користувач — показуємо йому кнопку повернення
-                    var button = InlineKeyboardButton.WithCallbackData("📤 Повернути книгу", $"act_r_{item.RowIndex}");
-                    keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
+                    keyboardButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("📤 Повернути мій примірник", $"act_r_{item.RowIndex}") });
                 }
-                // В іншому випадку (книга на руках у когось іншого) keyboard залишається null (кнопки не буде взагалі)
+
+                InlineKeyboardMarkup? keyboard = keyboardButtons.Count > 0 ? new InlineKeyboardMarkup(keyboardButtons) : null;
 
                 await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }
 
             if (foundBooks.Count > 5)
             {
-                await botClient.SendMessage(chatId, "<i>Показано перші 5 результатів. Якщо ви не знайшли потрібну книгу, спробуйте ввести більш точну назву.</i>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, "<i>Показано перші 5 результатів. Спробуйте ввести більш точну назву.</i>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
             }
         }
 
         public static async Task ShowUserBorrowedBooksAsync(ITelegramBotClient botClient, long chatId, string telegramName, CancellationToken cancellationToken)
         {
-            // Отримуємо список книг користувача
             var borrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(telegramName);
 
             if (borrowedBooks == null || borrowedBooks.Count == 0)
@@ -172,15 +176,11 @@ namespace LibraryBot.Services
 
             await botClient.SendMessage(chatId, $"📚 Книги, які зараз у вас на руках (всього: {borrowedBooks.Count}):", cancellationToken: cancellationToken);
 
-            // Виводимо кожну книгу окремим повідомленням з кнопкою
             foreach (var book in borrowedBooks)
             {
                 string text = $"📖 <b>{book.Title}</b>\n📊 Статус: 🔴 Знаходиться у вас";
-
-                // Перевикористовуємо вже готовий та налаштований ідентифікатор act_r_
                 var button = InlineKeyboardButton.WithCallbackData("📤 Повернути цю книгу", $"act_r_{book.CatalogRowIndex}");
                 var keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
-
                 await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }
         }
@@ -216,7 +216,6 @@ namespace LibraryBot.Services
 
             await botClient.SendMessage(chatId, $"🗑 Знайдено книг для видалення: {foundBooks.Count}:", cancellationToken: cancellationToken);
 
-            // Виводимо до 5 результатів, щоб не спамити
             foreach (var item in foundBooks.Take(5))
             {
                 string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
@@ -227,7 +226,7 @@ namespace LibraryBot.Services
                 var button = InlineKeyboardButton.WithCallbackData("🗑 Видалити", $"act_del_{item.RowIndex}");
                 var keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
 
-                await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }
         }
 
@@ -273,10 +272,9 @@ namespace LibraryBot.Services
                 var button = InlineKeyboardButton.WithCallbackData("✏️ Редагувати", $"act_edit_{item.RowIndex}");
                 var keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
 
-                await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }
         }
-
 
         public static async Task SearchBooksForExchangeAsync(ITelegramBotClient botClient, long chatId, string query, CancellationToken cancellationToken)
         {
@@ -314,10 +312,9 @@ namespace LibraryBot.Services
                 string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
 
-                // Читаємо статус обміну з нової колонки E (індекс 4)
-                string exchangeStatus = item.Data.Count > 4 ? item.Data[4]?.ToString()?.Trim() ?? "Так" : "Так";
+                // Читаємо статус обміну з колонки D (індекс 3)
+                string exchangeStatus = item.Data.Count > 3 ? item.Data[3]?.ToString()?.Trim() ?? "Так" : "Так";
 
-                // Книгу можна обміняти, якщо в колонці E не стоїть "Ні"
                 bool canExchange = !exchangeStatus.Equals("Ні", StringComparison.OrdinalIgnoreCase);
                 string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: {(canExchange ? "🟢 Можна обміняти" : "🚫 Не обмінюється")}";
 
@@ -367,21 +364,20 @@ namespace LibraryBot.Services
             {
                 string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
-                string status = item.Data.Count > 3 ? item.Data[3]?.ToString()?.Trim() ?? "" : "";
 
-                bool isAvailable = string.IsNullOrWhiteSpace(status) || status.Equals("Доступна", StringComparison.OrdinalIgnoreCase);
+                int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
+                bool isAvailable = disponible > 0;
 
                 string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: {(isAvailable ? "🟢 Доступна" : "🔴 Недоступна")}";
 
                 InlineKeyboardMarkup? keyboard = null;
                 if (isAvailable)
                 {
-                    // Унікальний ідентифікатор act_man_b_ (Manual Borrow)
                     var button = InlineKeyboardButton.WithCallbackData("🤝 Видати вручну", $"act_man_b_{item.RowIndex}");
                     keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
                 }
 
-                await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }
         }
 
@@ -396,7 +392,6 @@ namespace LibraryBot.Services
                 return;
             }
 
-            // Шукаємо збіги тільки серед виданих книг
             var foundBooks = new List<(int RowIndex, IList<object> Data)>();
             for (int i = 0; i < books.Count; i++)
             {
@@ -405,11 +400,12 @@ namespace LibraryBot.Services
                     ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
                      (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
                 {
-                    string status = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "" : "";
-                    bool isAvailable = string.IsNullOrWhiteSpace(status) || status.Equals("Доступна", StringComparison.OrdinalIgnoreCase);
+                    int disponible = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
+                    int total = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int t) ? t : 1 : 1;
+                    int reading = total - disponible;
 
-                    // Якщо книга НЕ доступна — значить її можна повернути
-                    if (!isAvailable)
+                    // Якщо хоч одну книгу читають, її можна повернути
+                    if (reading > 0)
                     {
                         foundBooks.Add((i + 2, row));
                     }
@@ -429,19 +425,13 @@ namespace LibraryBot.Services
                 string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
 
-                // Замінюємо дефолтне значення на "Читають"
-                string status = item.Data.Count > 3 ? item.Data[3]?.ToString()?.Trim() ?? "Читають" : "Читають";
+                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: 🔴 Читають";
 
-                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: 🔴 {status}";
-
-                // Створюємо унікальний CallbackData індивідуально для ручного повернення (act_man_r_)
                 var button = InlineKeyboardButton.WithCallbackData("📤 Повернути в бібліотеку", $"act_man_r_{item.RowIndex}");
                 var keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
 
-                await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }
         }
-
-
     }
 }
