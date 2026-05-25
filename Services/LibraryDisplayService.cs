@@ -49,9 +49,8 @@ namespace LibraryBot.Services
                 string title = row.Count > 0 ? row[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = row.Count > 1 ? row[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
                 string genre = row.Count > 2 ? row[2]?.ToString() ?? "Не вказано" : "Не вказано";
-                string exchange = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так"; // Індекс 3 (D)
+                string exchange = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так";
 
-                // Зчитуємо кількість
                 int disponible = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
                 int total = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int t) ? t : 1 : 1;
                 int reading = total - disponible;
@@ -141,13 +140,11 @@ namespace LibraryBot.Services
 
                 var keyboardButtons = new List<InlineKeyboardButton[]>();
 
-                // Якщо є вільні примірники — даємо можливість взяти
                 if (isAvailable)
                 {
                     keyboardButtons.Add(new[] { InlineKeyboardButton.WithCallbackData($"📥 Взяти книгу (Доступно: {disponible})", $"act_b_{item.RowIndex}") });
                 }
 
-                // Якщо користувач має цю книгу на руках — даємо можливість повернути
                 if (userBorrowedRowIndexes.Contains(item.RowIndex))
                 {
                     keyboardButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("📤 Повернути мій примірник", $"act_r_{item.RowIndex}") });
@@ -312,14 +309,24 @@ namespace LibraryBot.Services
                 string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
                 string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
 
-                // Читаємо статус обміну з колонки D (індекс 3)
                 string exchangeStatus = item.Data.Count > 3 ? item.Data[3]?.ToString()?.Trim() ?? "Так" : "Так";
+                int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
 
-                bool canExchange = !exchangeStatus.Equals("Ні", StringComparison.OrdinalIgnoreCase);
-                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: {(canExchange ? "🟢 Можна обміняти" : "🚫 Не обмінюється")}";
+                bool isExchangeable = !exchangeStatus.Equals("Ні", StringComparison.OrdinalIgnoreCase);
+                bool canExchangeNow = isExchangeable && disponible > 0;
+
+                string statusText;
+                if (!isExchangeable)
+                    statusText = "🚫 Не обмінюється";
+                else if (disponible <= 0)
+                    statusText = "🔴 Немає в наявності (всі на руках)";
+                else
+                    statusText = $"🟢 Можна обміняти (Доступно: {disponible})";
+
+                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: {statusText}";
 
                 InlineKeyboardMarkup? keyboard = null;
-                if (canExchange)
+                if (canExchangeNow)
                 {
                     var button = InlineKeyboardButton.WithCallbackData("🤝 Обміняти цю", $"act_exch_{item.RowIndex}");
                     keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
@@ -404,7 +411,6 @@ namespace LibraryBot.Services
                     int total = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int t) ? t : 1 : 1;
                     int reading = total - disponible;
 
-                    // Якщо хоч одну книгу читають, її можна повернути
                     if (reading > 0)
                     {
                         foundBooks.Add((i + 2, row));
@@ -429,6 +435,57 @@ namespace LibraryBot.Services
 
                 var button = InlineKeyboardButton.WithCallbackData("📤 Повернути в бібліотеку", $"act_man_r_{item.RowIndex}");
                 var keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
+
+                await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
+            }
+        }
+
+        // ПОШУК ДЛЯ КОРИСТУВАЦЬКОГО ОБМІНУ
+        public static async Task SearchBooksForUserExchangeAsync(ITelegramBotClient botClient, long chatId, string query, CancellationToken cancellationToken)
+        {
+            var books = await GoogleSheetsService.GetBooksAsync();
+            if (books == null || books.Count == 0)
+            {
+                await botClient.SendMessage(chatId, "Каталог порожній.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                return;
+            }
+
+            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
+            for (int i = 0; i < books.Count; i++)
+            {
+                var row = books[i];
+                if (row.Count > 0 &&
+                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
+                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
+                {
+                    foundBooks.Add((i + 2, row));
+                }
+            }
+
+            if (foundBooks.Count == 0)
+            {
+                await botClient.SendMessage(chatId, $"🔍 За запитом \"{query}\" нічого не знайдено. Спробуйте ввести іншу назву:", cancellationToken: cancellationToken);
+                return;
+            }
+
+            await botClient.SendMessage(chatId, $"🔍 Знайдено книг: {foundBooks.Count}. Оберіть ту, яку хочете отримати натомість:", cancellationToken: cancellationToken);
+
+            foreach (var item in foundBooks.Take(5))
+            {
+                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
+                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
+
+                int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
+                bool isAvailable = disponible > 0;
+
+                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: {(isAvailable ? $"🟢 Доступно ({disponible} шт.)" : "🔴 Немає в наявності (всі на руках)")}";
+
+                InlineKeyboardMarkup? keyboard = null;
+                if (isAvailable)
+                {
+                    var button = InlineKeyboardButton.WithCallbackData("🔄 Обміняти на цю книгу", $"userex_sel_{item.RowIndex}");
+                    keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
+                }
 
                 await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
             }

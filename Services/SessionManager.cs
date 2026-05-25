@@ -6,7 +6,6 @@ namespace LibraryBot.Services
     public static class SessionManager
     {
         public static readonly HashSet<long> AdminIds = new();
-
         // Додаємо метод для завантаження адмінів
         public static void LoadAdminsFromEnv()
         {
@@ -23,6 +22,7 @@ namespace LibraryBot.Services
                 }
             }
         }
+        public static readonly ConcurrentDictionary<long, UserExchangeSession> UserExchangeSessions = new();
 
         public static readonly ConcurrentDictionary<long, AdminBookSession> AdminBookSessions = new();
         public static readonly ConcurrentDictionary<string, PendingRequest> PendingRequests = new();
@@ -38,6 +38,7 @@ namespace LibraryBot.Services
             AdminSessions.TryRemove(chatId, out _);
             AdminBookSessions.TryRemove(chatId, out _);
             AdminExchangeSessions.TryRemove(chatId, out _);
+            UserExchangeSessions.TryRemove(chatId, out _); // <--- ДОДАНО
         }
     }
 }

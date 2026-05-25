@@ -148,7 +148,7 @@ namespace LibraryBot.Handlers
                     }
                     break;
 
-                case "/exchange":
+                case "/adminexchange":
                 case "🤝 Обмін":
                     if (SessionManager.AdminIds.Contains(chatId))
                     {
@@ -174,12 +174,19 @@ namespace LibraryBot.Handlers
                         await botClient.SendMessage(chatId, "🔍 Введіть назву книги або автора для пошуку серед книг, які зараз знаходяться НА РУКАХ:", cancellationToken: cancellationToken);
                     }
                     break;
+                case "/userexchange":
+                case "🤝 Обміняти":
+                    SessionManager.ClearSession(chatId);
+                    SessionManager.UserStates[chatId] = UserState.WaitingForUserExchangeTitle;
+                    SessionManager.UserExchangeSessions[chatId] = new UserExchangeSession();
+                    await botClient.SendMessage(chatId, "🤝 <b>Оформлення обміну книги</b>\n\nБудь ласка, введіть <b>НАЗВУ</b> книги, яку ви хочете принести до бібліотеки:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    break;
             }
         }
 
         public static Task HandleErrorAsync(ITelegramBotClient botClient, System.Exception exception, CancellationToken cancellationToken)
         {
-            System.Console.WriteLine($"Помилка Telegram API: {exception.Message}");
+            System.Console.WriteLine($"ERROR Telegram API: {exception.Message}");
             return Task.CompletedTask;
         }
     }

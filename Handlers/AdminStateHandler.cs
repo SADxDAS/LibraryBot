@@ -237,22 +237,38 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminExchangeSessions[chatId];
                 session.NewBookGenre = (text == "-") ? "Не вказано" : text;
 
+                // Переводимо у новий стан очікування відповіді щодо обміну
+                SessionManager.UserStates[chatId] = UserState.WaitingForExchangeExchangeStatus;
+
+                // Виводимо клавіатуру з кнопками вибору
+                var kb = new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Так", "Ні" }, new KeyboardButton[] { "❌ Скасувати дію" } }) { ResizeKeyboard = true };
+                await botClient.SendMessage(chatId, "🔄 Чи буде ЦЯ НОВА книга доступна для обміну в майбутньому?", replyMarkup: kb, cancellationToken: cancellationToken);
+                return true;
+            }
+
+            // НОВИЙ БЛОК: Фіналізація обміну з урахуванням вибору статусу
+            if (state == UserState.WaitingForExchangeExchangeStatus)
+            {
+                string exchangeStatus = (text.ToLower() == "ні") ? "Ні" : "Так";
+                var session = SessionManager.AdminExchangeSessions[chatId];
+
                 // 1. Записуємо в лог обміну
                 await GoogleSheetsService.AddExchangeLogAsync(session.OldBookTitle, session.NewBookTitle, session.ReaderName);
 
-                // 2. РОЗУМНЕ СПИСАННЯ СТАРОЇ КНИГИ (видалення або -1)
-                await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(session.OldBookTitle);
+                // 2. Списуємо стару книгу з балансу за точним індексом рядка
+                await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle);
 
-                // 3. Додаємо нову книгу
-                await GoogleSheetsService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, "Доступна", "Так");
+                // 3. Додаємо нову книгу (передаємо вибраний exchangeStatus замість захардкодженного "Так", кількість 1 шт)
+                await GoogleSheetsService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, "Доступна", exchangeStatus, 1);
 
                 SessionManager.ClearSession(chatId);
 
-                string successText = $"✅ **Обмін успішно завершено!**\n\n📖 Стара книга '**{session.OldBookTitle}**' списана з балансу (або зменшено її кількість).\n✨ Нова книга '**{session.NewBookTitle}**' додана та доступна для читачів.\n🗂 Запис внесено в аркуш 'Обмін'.";
+                string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
+                string successText = $"✅ **Обмін успішно завершено!**\n\n📖 Стара книга '**{session.OldBookTitle}**' списана з балансу.\n✨ Нова книга '**{session.NewBookTitle}**' додана до каталогу.\n📊 Статус обміну: *{exchText}*\n🗂 Запис внесено в аркуш 'Обмін'.";
+
                 await botClient.SendMessage(chatId, successText, parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 return true;
-            }
-            // 5. РУЧНА ВИДАЧА ТА ПОВЕРНЕННЯ
+            }            // 5. РУЧНА ВИДАЧА ТА ПОВЕРНЕННЯ
             if (state == UserState.WaitingForManualSearchQuery)
             {
                 await LibraryDisplayService.SearchBooksForManualBorrowAsync(botClient, chatId, text, cancellationToken);
@@ -270,9 +286,11 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminSessions[chatId];
                 session.ReaderContact = text;
 
-                // Передаємо: Назву, Ім'я офлайн-читача, замість нікнейму пишемо "Офлайн", контакт, chatId = 0, термін 30 днів
                 await GoogleSheetsService.AddBorrowingAsync(session.BookId!, session.ReaderName!, "Офлайн читач", session.ReaderContact!, 0, DateTime.Now.AddDays(30));
-                await GoogleSheetsService.UpdateBookStatusAsync(session.BookId!, "Читають");
+
+                // БУЛО: await GoogleSheetsService.UpdateBookStatusAsync(session.BookId!, "Читають");
+                // СТАЛО: Робимо -1 до доступних книг!
+                await GoogleSheetsService.ChangeAvailableCountAsync(session.CatalogRowIndex, -1);
 
                 SessionManager.ClearSession(chatId);
                 await botClient.SendMessage(chatId, $"✅ Готово! Книга '**{session.BookId}**' видана читачу **{session.ReaderName}** ({session.ReaderContact}).", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);

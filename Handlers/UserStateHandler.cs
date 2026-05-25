@@ -34,6 +34,54 @@ namespace LibraryBot.Handlers
                 await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, telegramName, cancellationToken);
                 return true;
             }
+            // --- ОБРОБКА ЗАПИТУ НА ОБМІН ВІД КОРИСТУВАЧА ---
+            if (currentState == UserState.WaitingForUserExchangeTitle)
+            {
+                if (messageText == "❌ Скасувати дію" || messageText.ToLower() == "/cancel")
+                {
+                    SessionManager.ClearSession(chatId);
+                    await botClient.SendMessage(chatId, "❌ Обмін скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    return true;
+                }
+                SessionManager.UserExchangeSessions[chatId].Title = messageText;
+                SessionManager.UserStates[chatId] = UserState.WaitingForUserExchangeAuthor;
+                await botClient.SendMessage(chatId, "👤 Введіть <b>АВТОРА</b> цієї книги (або надішліть `-`, якщо невідомий):", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                return true;
+            }
+
+            if (currentState == UserState.WaitingForUserExchangeAuthor)
+            {
+                SessionManager.UserExchangeSessions[chatId].Author = messageText;
+                SessionManager.UserStates[chatId] = UserState.WaitingForUserExchangeGenre;
+                await botClient.SendMessage(chatId, "🎭 Введіть <b>ЖАНР</b> цієї книги (або надішліть `-`):", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                return true;
+            }
+
+            if (currentState == UserState.WaitingForUserExchangeGenre)
+            {
+                SessionManager.UserExchangeSessions[chatId].Genre = messageText;
+
+                // Перемикаємо стан на пошук книги в бібліотеці
+                SessionManager.UserStates[chatId] = UserState.WaitingForUserExchangeSearchQuery;
+
+                await botClient.SendMessage(chatId, "🔍 <b>Крок 4 з 4: Вибір книги натомість</b>\n\nВведіть назву книги або автора з бібліотеки, яку ви хочете <b>забрати собі</b>:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                return true;
+            }
+
+            // ОБРОБКА ВВЕДЕНОГО ЗАПИТУ ПОШУКУ ДЛЯ ОБМІНУ
+            if (currentState == UserState.WaitingForUserExchangeSearchQuery)
+            {
+                if (messageText == "❌ Скасувати дію" || messageText.ToLower() == "/cancel")
+                {
+                    SessionManager.ClearSession(chatId);
+                    await botClient.SendMessage(chatId, "❌ Обмін скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    return true;
+                }
+
+                // Викликаємо спеціальний метод відображення результатів пошуку для обміну
+                await LibraryDisplayService.SearchBooksForUserExchangeAsync(botClient, chatId, messageText, cancellationToken);
+                return true;
+            }
 
             // КРОК 1: Користувач ввів реальне ім'я
             if (currentState == UserState.WaitingForBorrowRealName)

@@ -23,11 +23,10 @@ namespace LibraryBot.Services
             SpreadsheetId = Environment.GetEnvironmentVariable("SPREADSHEET_ID")
                 ?? throw new Exception("Помилка: SPREADSHEET_ID не знайдено в .env файлі!");
 
-            GoogleCredential credential;
-            using (var stream = new FileStream("credentials.json", FileMode.Open, FileAccess.Read))
-            {
-                credential = GoogleCredential.FromStream(stream).CreateScoped(Scopes);
-            }
+            // Вимикаємо попередження CS0618 тільки для наступного рядка
+#pragma warning disable CS0618
+            GoogleCredential credential = GoogleCredential.FromFile("credentials.json").CreateScoped(Scopes);
+#pragma warning restore CS0618 // Вмикаємо попередження назад
 
             _service = new SheetsService(new BaseClientService.Initializer()
             {
@@ -36,9 +35,7 @@ namespace LibraryBot.Services
             });
 
             Console.WriteLine("Google Sheets connected!");
-        }
-
-        // Беремо 6 колонок (до F)
+        }        // Беремо 6 колонок (до F)
         public static async Task<IList<IList<object>>?> GetBooksAsync()
         {
             string range = "Каталог!A2:F";
@@ -354,46 +351,44 @@ namespace LibraryBot.Services
             catch (Exception ex) { Console.WriteLine($"Помилка подовження: {ex.Message}"); return false; }
         }
         // Обробка старої книги при обміні (віднімаємо кількість або видаляємо рядок)
-        public static async Task<bool> ProcessExchangeOutgoingBookAsync(string title)
+        // Обробка старої книги при обміні (приймає індекс рядка)
+        public static async Task<bool> ProcessExchangeOutgoingBookAsync(int rowIndex, string title)
         {
             var books = await GetBooksAsync();
-            if (books == null) return false;
+            if (books == null || books.Count < rowIndex - 1) return false;
 
-            for (int i = 0; i < books.Count; i++)
+            var row = books[rowIndex - 2]; // Знаходимо конкретний рядок
+
+            // Перевіряємо, чи збігається назва (для безпеки)
+            if (row.Count > 0 && row[0]?.ToString()?.Equals(title, StringComparison.OrdinalIgnoreCase) == true)
             {
-                if (books[i].Count > 0 && books[i][0]?.ToString()?.Equals(title, StringComparison.OrdinalIgnoreCase) == true)
+                int disponible = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
+                int total = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int t) ? t : 1 : 1;
+
+                if (total > 1)
                 {
-                    int rowIndex = i + 2;
-                    // Зчитуємо поточну кількість
-                    int disponible = books[i].Count > 4 ? int.TryParse(books[i][4]?.ToString(), out int d) ? d : 0 : 0;
-                    int total = books[i].Count > 5 ? int.TryParse(books[i][5]?.ToString(), out int t) ? t : 1 : 1;
+                    // Робимо -1 від обох колонок
+                    int newDisponible = Math.Max(0, disponible - 1);
+                    int newTotal = total - 1;
 
-                    if (total > 1)
-                    {
-                        // Якщо книг більше 1, зменшуємо кількість на 1 (і Доступно, і Всього)
-                        int newDisponible = Math.Max(0, disponible - 1);
-                        int newTotal = total - 1;
+                    string range = $"Каталог!E{rowIndex}:F{rowIndex}";
+                    var valueRange = new ValueRange();
+                    valueRange.Values = new List<IList<object>> { new List<object> { newDisponible, newTotal } };
 
-                        string range = $"Каталог!E{rowIndex}:F{rowIndex}";
-                        var valueRange = new ValueRange();
-                        valueRange.Values = new List<IList<object>> { new List<object> { newDisponible, newTotal } };
+                    var updateRequest = _service!.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
+                    updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
 
-                        var updateRequest = _service!.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
-                        updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
-
-                        try { await updateRequest.ExecuteAsync(); return true; }
-                        catch { return false; }
-                    }
-                    else
-                    {
-                        // Якщо копія була єдина — повністю видаляємо рядок зі зсувом
-                        return await DeleteBookFromCatalogAsync(title);
-                    }
+                    try { await updateRequest.ExecuteAsync(); return true; }
+                    catch { return false; }
+                }
+                else
+                {
+                    // Якщо копія була єдина — повністю видаляємо рядок
+                    return await DeleteBookFromCatalogAsync(title);
                 }
             }
             return false;
         }
-
 
 
     }
