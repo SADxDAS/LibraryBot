@@ -39,6 +39,7 @@
         WaitingForExchangeExchangeStatus,
         WaitingForEditBookQuantity,
         WaitingForUserExchangeSearchQuery,
+        WaitingForAddBookDuplicateCheck,
     }
 
     public class ManualBorrowingSession

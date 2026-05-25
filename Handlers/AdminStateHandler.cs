@@ -24,10 +24,151 @@ namespace LibraryBot.Handlers
             // 1. ДОДАВАННЯ КНИГИ
             if (state == UserState.WaitingForAddBookTitle)
             {
-                SessionManager.AdminBookSessions[chatId].Title = text;
+                string newTitle = text.Trim();
+                var session = SessionManager.AdminBookSessions[chatId];
+                session.Title = newTitle;
+                session.EditRowIndex = 0; // Скидаємо індекс перед пошуком
+
+                // Завантажуємо існуючі книги для перевірки на дублікати
+                var books = await GoogleSheetsService.GetBooksAsync();
+                var similarBooks = new System.Collections.Generic.List<string>();
+
+                if (books != null)
+                {
+                    // Нормалізуємо введену назву
+                    string normalizedNew = newTitle.ToLower().Replace(" ", "").Replace("-", "").Replace("'", "").Replace("\"", "").Replace("«", "").Replace("»", "");
+
+                    for (int i = 0; i < books.Count; i++)
+                    {
+                        var row = books[i];
+                        if (row.Count > 0)
+                        {
+                            string existingTitle = row[0]?.ToString() ?? "";
+                            string normalizedExisting = existingTitle.ToLower().Replace(" ", "").Replace("-", "").Replace("'", "").Replace("\"", "").Replace("«", "").Replace("»", "");
+
+                            if (!string.IsNullOrEmpty(normalizedExisting) && !string.IsNullOrEmpty(normalizedNew))
+                            {
+                                // Критерії схожості
+                                if (normalizedExisting.Contains(normalizedNew) || normalizedNew.Contains(normalizedExisting) ||
+                                    (System.Math.Abs(normalizedNew.Length - normalizedExisting.Length) <= 5 && ComputeLevenshteinDistance(normalizedNew, normalizedExisting) <= 3))
+                                {
+                                    similarBooks.Add(existingTitle);
+                                    // Зберігаємо індекс найпершого знайденого збігу, щоб потім зробити йому +1
+                                    if (session.EditRowIndex == 0) session.EditRowIndex = i + 2;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (similarBooks.Count > 0)
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookDuplicateCheck;
+
+                    string warning = $"⚠️ **Знайдено схожі книги!**\nУ каталозі вже є книги з ідентичною або дуже схожою назвою:\n\n";
+
+                    // Беремо унікальні та залишаємо перші 5
+                    foreach (var b in System.Linq.Enumerable.Take(System.Linq.Enumerable.Distinct(similarBooks), 5))
+                    {
+                        warning += $"📖 {b}\n";
+                    }
+                    warning += "\nВиберіть, що робити далі:";
+
+                    // Створюємо 3 вертикальні кнопки за твоїм шаблоном
+                    var kb = new ReplyKeyboardMarkup(new[] {
+                        new KeyboardButton[] { "➕ Додати нову" },
+                        new KeyboardButton[] { "⬆️ Збільшити кількість на 1 у вже існуючої" },
+                        new KeyboardButton[] { "❌ Скасувати" }
+                    })
+                    { ResizeKeyboard = true };
+
+                    await botClient.SendMessage(chatId, warning, parseMode: ParseMode.Markdown, replyMarkup: kb, cancellationToken: cancellationToken);
+                    return true;
+                }
+
+                // Якщо схожих немає - йдемо далі
                 SessionManager.UserStates[chatId] = UserState.WaitingForAddBookAuthor;
-                await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
                 return true;
+            }
+
+            // НОВИЙ БЛОК: Вирішення конфлікту дублікатів
+            if (state == UserState.WaitingForAddBookDuplicateCheck)
+            {
+                if (text == "➕ Додати нову")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookAuthor;
+                    await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                    return true;
+                }
+                else if (text == "⬆️ Збільшити кількість на 1 у вже існуючої")
+                {
+                    var session = SessionManager.AdminBookSessions[chatId];
+                    int rowIndex = session.EditRowIndex;
+
+                    if (rowIndex == 0)
+                    {
+                        await botClient.SendMessage(chatId, "❌ Помилка: не вдалося знайти оригінальну книгу.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        SessionManager.ClearSession(chatId);
+                        return true;
+                    }
+
+                    var books = await GoogleSheetsService.GetBooksAsync();
+                    if (books != null && books.Count >= rowIndex - 1)
+                    {
+                        var row = books[rowIndex - 2];
+
+                        // Зчитуємо всі поточні дані з рядка
+                        string t = row.Count > 0 ? row[0]?.ToString() ?? "" : "";
+                        string a = row.Count > 1 ? row[1]?.ToString() ?? "" : "";
+                        string g = row.Count > 2 ? row[2]?.ToString() ?? "" : "";
+                        string e = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так";
+                        int ava = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int da) ? da : 0 : 0;
+                        int tot = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int dt) ? dt : 1 : 1;
+
+                        // Перезаписуємо рядок, роблячи +1 до обох колонок (Доступно і Всього)
+                        bool updated = await GoogleSheetsService.UpdateBookInCatalogAsync(rowIndex, t, a, g, e, ava + 1, tot + 1);
+
+                        if (updated)
+                            await botClient.SendMessage(chatId, $"✅ Кількість книги **{t}** успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        else
+                            await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        await botClient.SendMessage(chatId, $"❌ Не вдалося зчитати дані з таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+
+                    SessionManager.ClearSession(chatId);
+                    return true;
+                }
+                else if (text == "❌ Скасувати" || text.ToLower() == "/cancel" || text == "❌ Скасувати дію")
+                {
+                    SessionManager.ClearSession(chatId);
+                    await botClient.SendMessage(chatId, "❌ Додавання книги скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    return true;
+                }
+                else
+                {
+                    await botClient.SendMessage(chatId, "❌ Будь ласка, скористайтеся кнопками нижче:", cancellationToken: cancellationToken);
+                    return true;
+                }
+            }
+            // НОВИЙ БЛОК: Вирішення конфлікту дублікатів
+            if (state == UserState.WaitingForAddBookDuplicateCheck)
+            {
+                if (text == "➕ Додати ще одну")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookAuthor;
+                    // Прибираємо кнопки "Додати/Скасувати", щоб було зручно вводити автора
+                    await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                    return true;
+                }
+                else
+                {
+                    await botClient.SendMessage(chatId, "❌ Будь ласка, скористайтеся кнопками нижче:", cancellationToken: cancellationToken);
+                    return true;
+                }
             }
             if (state == UserState.WaitingForAddBookAuthor)
             {
@@ -303,6 +444,28 @@ namespace LibraryBot.Handlers
             }
 
             return false;
+        }
+
+
+        // Розумний алгоритм для пошуку помилок та одруківок
+        private static int ComputeLevenshteinDistance(string s, string t)
+        {
+            if (string.IsNullOrEmpty(s)) return string.IsNullOrEmpty(t) ? 0 : t.Length;
+            if (string.IsNullOrEmpty(t)) return s.Length;
+            int[] v0 = new int[t.Length + 1];
+            int[] v1 = new int[t.Length + 1];
+            for (int i = 0; i < v0.Length; i++) v0[i] = i;
+            for (int i = 0; i < s.Length; i++)
+            {
+                v1[0] = i + 1;
+                for (int j = 0; j < t.Length; j++)
+                {
+                    int cost = (s[i] == t[j]) ? 0 : 1;
+                    v1[j + 1] = System.Math.Min(System.Math.Min(v1[j] + 1, v0[j + 1] + 1), v0[j] + cost);
+                }
+                for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
+            }
+            return v1[t.Length];
         }
     }
 }
