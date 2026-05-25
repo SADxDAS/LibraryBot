@@ -205,15 +205,23 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminBookSessions[chatId];
                 int qty = session.Quantity > 0 ? session.Quantity : 1;
 
-                // Передаємо зібрану кількість у метод
-                await GoogleSheetsService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, "Доступна", exchangeStatus, qty);
+                // Отримуємо результат: true якщо успішно, false якщо Google видав помилку
+                bool success = await GoogleSheetsService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, "Доступна", exchangeStatus, qty);
                 SessionManager.ClearSession(chatId);
 
-                string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
-                await botClient.SendMessage(chatId, $"✅ Книгу **{session.Title}** ({qty} шт.) успішно додано!\nСтатус: {exchText}", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                if (success)
+                {
+                    string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
+                    await botClient.SendMessage(chatId, $"✅ Книгу **{session.Title}** ({qty} шт.) успішно додано!\nСтатус: {exchText}", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    // Рятуємо користувача від невідомості
+                    await botClient.SendMessage(chatId, "❌ **Помилка на стороні сервера Google Sheets.**\nНе вдалося додати книгу. Можливо, сервіс тимчасово недоступний. Спробуйте ще раз через хвилину.", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                }
+
                 return true;
             }
-
             // 2. ВИДАЛЕННЯ КНИГИ
             if (state == UserState.WaitingForDeleteSearchQuery)
             {

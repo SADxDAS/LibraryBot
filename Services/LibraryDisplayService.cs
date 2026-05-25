@@ -98,14 +98,30 @@ namespace LibraryBot.Services
             }
 
             var foundBooks = new List<(int RowIndex, IList<object> Data)>();
+            string normalizedQuery = query.ToLower().Trim();
+
             for (int i = 0; i < books.Count; i++)
             {
                 var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
+                if (row.Count > 0)
                 {
-                    foundBooks.Add((i + 2, row));
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString()?.ToLower() ?? "";
+                    string author = row.Count > 1 ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString()?.ToLower() ?? "" : "";
+
+                    // 1. Суворий пошук (якщо користувач ввів точно)
+                    bool exactMatch = title.Contains(normalizedQuery) || author.Contains(normalizedQuery);
+
+                    // 2. Fuzzy пошук (допускаємо 2 помилки, якщо слово довге)
+                    int distTitle = GoogleSheetsService.ComputeLevenshteinDistance(normalizedQuery, title);
+                    int distAuthor = GoogleSheetsService.ComputeLevenshteinDistance(normalizedQuery, author);
+
+                    // Якщо слово коротке (до 5 літер), вимагаємо ідеального збігу, для довших — дозволяємо 2 одруківки
+                    bool fuzzyMatch = (normalizedQuery.Length > 5 && (distTitle <= 2 || distAuthor <= 2));
+
+                    if (exactMatch || fuzzyMatch)
+                    {
+                        foundBooks.Add((i + 2, row));
+                    }
                 }
             }
 

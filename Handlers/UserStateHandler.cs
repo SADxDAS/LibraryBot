@@ -16,6 +16,7 @@ namespace LibraryBot.Handlers
         {
             long chatId = message.Chat.Id;
             string messageText = message.Text?.Trim() ?? "";
+
             if (currentState == UserState.WaitingForSearchQuery)
             {
                 if (messageText == "❌ Скасувати дію" || messageText.ToLower() == "/cancel")
@@ -34,6 +35,7 @@ namespace LibraryBot.Handlers
                 await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, telegramName, cancellationToken);
                 return true;
             }
+
             // --- ОБРОБКА ЗАПИТУ НА ОБМІН ВІД КОРИСТУВАЧА ---
             if (currentState == UserState.WaitingForUserExchangeTitle)
             {
@@ -89,7 +91,6 @@ namespace LibraryBot.Handlers
                 SessionManager.BorrowSessions[chatId].RealName = messageText;
                 SessionManager.UserStates[chatId] = UserState.WaitingForBorrowContactMethod;
 
-                // Створюємо ТИМЧАСОВУ нижню клавіатуру для запиту контакту
                 var contactKeyboard = new ReplyKeyboardMarkup(new[]
                 {
                     new[] { KeyboardButton.WithRequestContact("📱 Поділитися номером") },
@@ -129,7 +130,6 @@ namespace LibraryBot.Handlers
                 {
                     SessionManager.UserStates[chatId] = UserState.WaitingForBorrowContactInput;
                     session.ContactMethod = "Instagram";
-                    // Прибираємо клавіатуру, щоб не заважала вводити текст
                     await botClient.SendMessage(chatId, "Введіть ваш нікнейм в Instagram (наприклад, @paper_life):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
                     return true;
                 }
@@ -142,7 +142,6 @@ namespace LibraryBot.Handlers
                     return true;
                 }
 
-                // Якщо ввели якусь дурницю замість натискання кнопки
                 await botClient.SendMessage(chatId, "Будь ласка, скористайтеся кнопками меню нижче 👇", cancellationToken: cancellationToken);
                 return true;
             }
@@ -154,6 +153,7 @@ namespace LibraryBot.Handlers
                 session.Contact = $"{session.ContactMethod}: {messageText}";
                 return await ProceedToPeriodSelection(botClient, chatId, cancellationToken);
             }
+
             if (currentState == UserState.WaitingForPageNumber)
             {
                 if (int.TryParse(messageText, out int pageNumber) && pageNumber > 0)
@@ -167,8 +167,10 @@ namespace LibraryBot.Handlers
                 }
                 return true;
             }
+
             return false;
         }
+
         // Допоміжний метод, щоб не дублювати код переходу до вибору періоду
         private static async Task<bool> ProceedToPeriodSelection(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
         {
