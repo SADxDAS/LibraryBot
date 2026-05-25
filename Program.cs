@@ -17,7 +17,11 @@ namespace LibraryBot
             Env.Load();
             SessionManager.LoadAdminsFromEnv();
             string botToken = Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN") ?? "";
-
+            string? googleCreds = Environment.GetEnvironmentVariable("GOOGLE_CREDENTIALS_JSON");
+            if (!string.IsNullOrWhiteSpace(googleCreds))
+            {
+                System.IO.File.WriteAllText("credentials.json", googleCreds);
+            }
             GoogleSheetsService.Initialize();
 
             var botClient = new TelegramBotClient(botToken);
