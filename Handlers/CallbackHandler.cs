@@ -41,7 +41,10 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    int disponible = books[rowIndex - 2].Count > 4 ? int.TryParse(books[rowIndex - 2][4]?.ToString(), out int d) ? d : 0 : 0;
+                    var row = books[rowIndex - 2];
+                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE
+                        ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
+                        : 0;
 
                     if (disponible <= 0)
                     {
@@ -50,7 +53,7 @@ namespace LibraryBot.Handlers
                         return;
                     }
 
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "";
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     SessionManager.BorrowSessions[chatId] = new UserBorrowingSession { BookTitle = title, CatalogRowIndex = rowIndex };
                     SessionManager.UserStates[chatId] = UserState.WaitingForBorrowRealName;
@@ -76,7 +79,7 @@ namespace LibraryBot.Handlers
                 var books = await GoogleSheetsService.GetBooksAsync();
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "";
+                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     var request = new PendingRequest
                     {
@@ -87,7 +90,6 @@ namespace LibraryBot.Handlers
                         CatalogRowIndex = rowIndex
                     };
 
-                    // ДОДАЄМО ЗАПИТ У GOOGLE ТАБЛИЦЮ!
                     await GoogleSheetsService.AddPendingRequestAsync(request);
 
                     var adminKeyboard = new InlineKeyboardMarkup(new[]
@@ -114,7 +116,6 @@ namespace LibraryBot.Handlers
                 bool isApprove = callbackQuery.Data.StartsWith("req_apr_");
                 string reqId = callbackQuery.Data.Substring(8);
 
-                // Отримуємо запит із бази даних таблиць!
                 var request = await GoogleSheetsService.GetPendingRequestAsync(reqId);
                 if (request == null)
                 {
@@ -139,10 +140,9 @@ namespace LibraryBot.Handlers
                         });
 
                         await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", parseMode: ParseMode.Html, replyMarkup: choiceKeyboard, cancellationToken: cancellationToken);
-                        return; // Запит видалимо на наступному кроці (userex_yes/no)
+                        return;
                     }
 
-                    // Для звичайних операцій - видаляємо запит і виконуємо дію
                     await GoogleSheetsService.DeletePendingRequestAsync(reqId);
 
                     if (request.Type == RequestType.Borrow)
@@ -161,7 +161,7 @@ namespace LibraryBot.Handlers
 
                     await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + "\n\n✅ **СХВАЛЕНО**", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
                 }
-                else // Відхилено
+                else
                 {
                     await GoogleSheetsService.DeletePendingRequestAsync(reqId);
 
@@ -175,12 +175,15 @@ namespace LibraryBot.Handlers
                     await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + "\n\n❌ **ВІДХИЛЕНО**", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
                 }
             }
+            // ФІКС ТУТ: Розумне вирахування довжини текстового тригера кнопки статусу
             else if (callbackQuery.Data.StartsWith("userex_yes_") || callbackQuery.Data.StartsWith("userex_no_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 bool canExchange = callbackQuery.Data.StartsWith("userex_yes_");
-                string reqId = callbackQuery.Data.Substring(11);
+
+                // Якщо увімкнено так - зрізаємо 11 літер, якщо ні - 10 літер
+                string reqId = canExchange ? callbackQuery.Data.Substring(11) : callbackQuery.Data.Substring(10);
 
                 var request = await GoogleSheetsService.GetPendingRequestAsync(reqId);
                 if (request == null)
@@ -215,14 +218,18 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    int disponible = books[rowIndex - 2].Count > 4 ? int.TryParse(books[rowIndex - 2][4]?.ToString(), out int d) ? d : 0 : 0;
+                    var row = books[rowIndex - 2];
+                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE
+                        ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
+                        : 0;
+
                     if (disponible <= 0)
                     {
                         try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Цю книгу вже встигли забрати.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                         return;
                     }
 
-                    string libBookTitle = books[rowIndex - 2][0]?.ToString() ?? "";
+                    string libBookTitle = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
                     var session = SessionManager.UserExchangeSessions[chatId];
                     session.LibraryBookTitle = libBookTitle;
                     session.LibraryBookRowIndex = rowIndex;
@@ -242,7 +249,6 @@ namespace LibraryBot.Handlers
                         NewBookGenre = session.Genre
                     };
 
-                    // ДОДАЄМО ЗАПИТ У GOOGLE ТАБЛИЦЮ!
                     await GoogleSheetsService.AddPendingRequestAsync(request);
 
                     var adminKeyboard = new InlineKeyboardMarkup(new[]
@@ -290,7 +296,7 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "Невідома книга";
+                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "Невідома книга";
                     var confirmKeyboard = new InlineKeyboardMarkup(new[]
                     {
                         new InlineKeyboardButton[] { InlineKeyboardButton.WithCallbackData("✅ Так, видалити", $"conf_del_{rowIndex}"), InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"canc_del_{rowIndex}") }
@@ -307,7 +313,7 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "";
+                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
                     bool deleted = await GoogleSheetsService.DeleteBookFromCatalogAsync(title);
                     if (deleted)
                         await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу **{title}** успішно видалено з каталогу.", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
@@ -329,13 +335,14 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    string oldTitle = books[rowIndex - 2].Count > 0 ? books[rowIndex - 2][0]?.ToString() ?? "" : "";
-                    string oldAuthor = books[rowIndex - 2].Count > 1 ? books[rowIndex - 2][1]?.ToString() ?? "" : "";
-                    string oldGenre = books[rowIndex - 2].Count > 2 ? books[rowIndex - 2][2]?.ToString() ?? "" : "";
-                    string oldExchange = books[rowIndex - 2].Count > 3 ? books[rowIndex - 2][3]?.ToString()?.Trim() ?? "Так" : "Так";
+                    var row = books[rowIndex - 2];
+                    string oldTitle = row.Count > GoogleSheetsService.COL_CATALOG_TITLE ? row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "" : "";
+                    string oldAuthor = row.Count > GoogleSheetsService.COL_CATALOG_AUTHOR ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
+                    string oldGenre = row.Count > GoogleSheetsService.COL_CATALOG_GENRE ? row[GoogleSheetsService.COL_CATALOG_GENRE]?.ToString() ?? "" : "";
+                    string oldExchange = row.Count > GoogleSheetsService.COL_CATALOG_EXCHANGE ? row[GoogleSheetsService.COL_CATALOG_EXCHANGE]?.ToString()?.Trim() ?? "Так" : "Так";
 
-                    int oldAvailable = books[rowIndex - 2].Count > 4 ? int.TryParse(books[rowIndex - 2][4]?.ToString(), out int ava) ? ava : 0 : 0;
-                    int oldTotal = books[rowIndex - 2].Count > 5 ? int.TryParse(books[rowIndex - 2][5]?.ToString(), out int tot) ? tot : 1 : 1;
+                    int oldAvailable = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int ava) ? ava : 0 : 0;
+                    int oldTotal = row.Count > GoogleSheetsService.COL_CATALOG_TOTAL ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_TOTAL]?.ToString(), out int tot) ? tot : 1 : 1;
 
                     SessionManager.AdminBookSessions[chatId] = new AdminBookSession
                     {
@@ -362,7 +369,8 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    int disponible = books[rowIndex - 2].Count > 4 ? int.TryParse(books[rowIndex - 2][4]?.ToString(), out int d) ? d : 0 : 0;
+                    var row = books[rowIndex - 2];
+                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
                     if (disponible <= 0)
                     {
                         try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Всі примірники цієї книги зараз на руках. Обмін неможливий.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -370,7 +378,7 @@ namespace LibraryBot.Handlers
                         return;
                     }
 
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "";
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     SessionManager.AdminExchangeSessions[chatId] = new AdminExchangeSession { OldBookRowIndex = rowIndex, OldBookTitle = title };
                     SessionManager.UserStates[chatId] = UserState.WaitingForExchangeReaderName;
@@ -388,8 +396,9 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "";
-                    int disponible = books[rowIndex - 2].Count > 4 ? int.TryParse(books[rowIndex - 2][4]?.ToString(), out int d) ? d : 0 : 0;
+                    var row = books[rowIndex - 2];
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
 
                     if (disponible <= 0)
                     {
@@ -414,7 +423,7 @@ namespace LibraryBot.Handlers
 
                 if (books != null && books.Count >= rowIndex - 1)
                 {
-                    string title = books[rowIndex - 2][0]?.ToString() ?? "";
+                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     await GoogleSheetsService.ChangeAvailableCountAsync(rowIndex, 1);
                     await GoogleSheetsService.LogReturnDateAsync(title);
@@ -446,7 +455,6 @@ namespace LibraryBot.Handlers
                     BorrowDays = days
                 };
 
-                // ДОДАЄМО ЗАПИТ У GOOGLE ТАБЛИЦЮ!
                 await GoogleSheetsService.AddPendingRequestAsync(request);
 
                 var adminKeyboard = new InlineKeyboardMarkup(new[]

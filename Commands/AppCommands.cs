@@ -135,7 +135,7 @@ namespace LibraryBot.Commands
 
     public class UserExchangeCommand : ICommand
     {
-        public string[] Triggers => new[] { "🤝 Обміняти книгу" };
+        public string[] Triggers => new[] { "/exchange", "🤝 Обміняти" };
         public async Task ExecuteAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
         {
             long chatId = message.Chat.Id;
@@ -195,7 +195,7 @@ namespace LibraryBot.Commands
 
     public class AdminExchangeCommand : ICommand
     {
-        public string[] Triggers => new[] { "/exchange", "🤝 Обмін" };
+        public string[] Triggers => new[] { "/handexchange", "🤝 Обмін" };
         public async Task ExecuteAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
         {
             long chatId = message.Chat.Id;
