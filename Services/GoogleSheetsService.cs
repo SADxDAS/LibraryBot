@@ -751,5 +751,34 @@ namespace LibraryBot.Services
             }
             return result;
         }
+        // НОВИЙ МЕТОД: Отримання списку всіх активних видач
+        public static async Task<List<(string Title, string Name, string Contact, string DueDate)>> GetActiveBorrowingsAsync()
+        {
+            var result = new List<(string Title, string Name, string Contact, string DueDate)>();
+            var borrowings = await GetAllBorrowingsAsync();
+
+            if (borrowings == null || borrowings.Count <= 1) return result;
+
+            foreach (var row in borrowings.Skip(1)) // Пропускаємо шапку таблиці
+            {
+                string returnDate = row.Count > COL_BORROW_RETURNDATE ? row[COL_BORROW_RETURNDATE]?.ToString() ?? "" : "";
+
+                if (string.IsNullOrWhiteSpace(returnDate)) // Книгу ще НЕ повернули
+                {
+                    string title = row.Count > COL_BORROW_TITLE ? row[COL_BORROW_TITLE]?.ToString() ?? "Невідомо" : "Невідомо";
+                    string realName = row.Count > COL_BORROW_REALNAME ? row[COL_BORROW_REALNAME]?.ToString() ?? "" : "";
+                    string tgName = row.Count > COL_BORROW_TGNAME ? row[COL_BORROW_TGNAME]?.ToString() ?? "" : "";
+                    string contact = row.Count > COL_BORROW_CONTACT ? row[COL_BORROW_CONTACT]?.ToString() ?? "Не вказано" : "Не вказано";
+                    string dueDateStr = row.Count > COL_BORROW_DUEDATE ? row[COL_BORROW_DUEDATE]?.ToString() ?? "Не вказано" : "Не вказано";
+
+                    // Формуємо ім'я
+                    string fullName = string.IsNullOrWhiteSpace(realName) || realName == "Без імені" ? tgName : $"{realName} ({tgName})";
+                    if (string.IsNullOrWhiteSpace(fullName)) fullName = "Невідомий читач";
+
+                    result.Add((title, fullName, contact, dueDateStr));
+                }
+            }
+            return result;
+        }
     }
 }

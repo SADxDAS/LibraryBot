@@ -35,6 +35,7 @@ namespace LibraryBot.Handlers
             new ManualReturnCommand(),
             new MyProfileCommand(),
             new AdminStatsCommand(),
+            new AdminBorrowingsListCommand()
         };
 
         public static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)

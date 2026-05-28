@@ -421,6 +421,47 @@ namespace LibraryBot.Handlers
                 await botClient.SendMessage(chatId, msg, parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
                 try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
             }
+            // Гортання сторінок для списку видач
+            else if (callbackQuery.Data.StartsWith("borrow_page_"))
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+
+                int page = int.Parse(callbackQuery.Data.Replace("borrow_page_", ""));
+
+                var activeList = await GoogleSheetsService.GetActiveBorrowingsAsync();
+                if (activeList.Count == 0) return;
+
+                int pageSize = 10;
+                int totalPages = (int)Math.Ceiling(activeList.Count / (double)pageSize);
+
+                var pageItems = activeList.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+                string text = $"📋 <b>СПИСОК ВИДАНИХ КНИГ (Сторінка {page} з {totalPages})</b>\n\n";
+                int count = (page - 1) * pageSize + 1;
+
+                foreach (var item in pageItems)
+                {
+                    text += $"👤 <b>{count}. {item.Name}</b>\n";
+                    text += $"📖 Книга: {item.Title}\n";
+                    text += $"📞 Контакт: <code>{item.Contact}</code>\n";
+                    text += $"📅 Повернути до: {item.DueDate}\n";
+                    text += "➖➖➖➖➖➖➖➖\n";
+                    count++;
+                }
+
+                // Використовуємо наш допоміжний метод з команди для генерації кнопок
+                var inlineKeyboard = LibraryBot.Commands.AdminBorrowingsListCommand.GetPaginationKeyboard(page, totalPages);                // Оновлюємо текст поточного повідомлення
+                await botClient.EditMessageText(
+                    chatId: chatId,
+                    messageId: callbackQuery.Message.MessageId,
+                    text: text,
+                    parseMode: Telegram.Bot.Types.Enums.ParseMode.Html,
+                    replyMarkup: inlineKeyboard,
+                    cancellationToken: cancellationToken
+                );
+
+                try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
+            }
             else if (callbackQuery.Data.StartsWith("act_man_b_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;

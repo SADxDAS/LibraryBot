@@ -35,7 +35,7 @@ namespace LibraryBot.UI
                 new KeyboardButton[] { "➕ Додати", "✏️ Редагувати", "🗑 Видалити" },
                 new KeyboardButton[] { "📥 Видати вручну", "📤 Повернути вручну" },
                 new KeyboardButton[] { "📊 Статистика","🤝 Обмін"},
-                new KeyboardButton[] { "❌ Скасувати дію" },
+                new KeyboardButton[] { "📋 Список видач","❌ Скасувати дію" },
             })
             {
                 ResizeKeyboard = true
