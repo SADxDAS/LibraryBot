@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using static LibraryBot.Commands.ManualReturnCommand;
 
 namespace LibraryBot.Handlers
 {
@@ -31,7 +32,9 @@ namespace LibraryBot.Handlers
             new EditBookCommand(),
             new AdminExchangeCommand(),
             new ManualBorrowCommand(),
-            new ManualReturnCommand()
+            new ManualReturnCommand(),
+            new MyProfileCommand(),
+            new AdminStatsCommand(),
         };
 
         public static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)

@@ -387,6 +387,40 @@ namespace LibraryBot.Handlers
                     await botClient.SendMessage(chatId, $"Selected: **{title}**.\n👤 Введіть Ім'я в Telegram (або контакт) читача, який робить обмін:", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
                 }
             }
+            else if (callbackQuery.Data == "view_overdue")
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+
+                var overdueList = await GoogleSheetsService.GetOverdueBorrowingsAsync();
+
+                if (overdueList.Count == 0)
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "✅ Наразі боржників немає!", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+
+                string msg = "🚨 **СПИСОК БОРЖНИКІВ**\n\n";
+                int count = 1;
+                foreach (var item in overdueList)
+                {
+                    msg += $"👤 **{count}. {item.Name}**\n";
+                    msg += $"📖 Книга: {item.Title}\n";
+                    msg += $"📞 Контакт: `{item.Contact}`\n";
+                    msg += $"📅 Дедлайн був: {item.DueDate}\n";
+                    msg += "➖➖➖➖➖➖➖➖\n";
+                    count++;
+
+                    // Захист від занадто довгого повідомлення (ліміт Телеграму)
+                    if (msg.Length > 3800)
+                    {
+                        msg += "*(Показано не всіх боржників через ліміт символів)*";
+                        break;
+                    }
+                }
+
+                await botClient.SendMessage(chatId, msg, parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
+            }
             else if (callbackQuery.Data.StartsWith("act_man_b_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
@@ -477,5 +511,6 @@ namespace LibraryBot.Handlers
             try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); }
             catch (Exception ex) { Console.WriteLine($"[Telegram API] Помилка AnswerCallbackQuery: {ex.Message}"); }
         }
+
     }
 }

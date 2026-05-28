@@ -626,5 +626,130 @@ namespace LibraryBot.Services
             }
             return v1[t.Length];
         }
+
+        // НОВИЙ МЕТОД ДЛЯ ПРОФІЛЮ КОРИСТУВАЧА
+        public static async Task<(int CurrentlyReadingCount, int ReadCount, List<string> ReadBooks, List<string> CurrentBooks)> GetUserProfileAsync(long chatId)
+        {
+            var borrowings = await GetAllBorrowingsAsync();
+            int readCount = 0;
+            int currentCount = 0;
+            var readBooks = new List<string>();
+            var currentBooks = new List<string>();
+
+            if (borrowings == null) return (0, 0, readBooks, currentBooks);
+
+            foreach (var row in borrowings)
+            {
+                if (row.Count > COL_BORROW_CHATID)
+                {
+                    string rowChatId = row[COL_BORROW_CHATID]?.ToString() ?? "";
+                    if (rowChatId == chatId.ToString()) // Шукаємо всі записи цього користувача
+                    {
+                        string title = row[COL_BORROW_TITLE]?.ToString() ?? "Невідома книга";
+                        string returnDate = row.Count > COL_BORROW_RETURNDATE ? row[COL_BORROW_RETURNDATE]?.ToString() ?? "" : "";
+
+                        if (string.IsNullOrWhiteSpace(returnDate))
+                        {
+                            currentCount++;
+                            currentBooks.Add(title);
+                        }
+                        else
+                        {
+                            readCount++;
+                            readBooks.Add(title);
+                        }
+                    }
+                }
+            }
+            return (currentCount, readCount, readBooks, currentBooks);
+        }
+        // НОВИЙ МЕТОД ДЛЯ СТАТИСТИКИ АДМІНА
+        public static async Task<(int TotalBooks, int AvailableBooks, int BorrowedBooks, int OverdueBooks, int PendingRequests)> GetLibraryStatisticsAsync()
+        {
+            // 1. Рахуємо фонд та доступні книги (Каталог)
+            var books = await GetBooksAsync();
+            int total = 0, available = 0;
+            if (books != null)
+            {
+                foreach (var row in books)
+                {
+                    if (row.Count > COL_CATALOG_TOTAL && int.TryParse(row[COL_CATALOG_TOTAL]?.ToString(), out int t)) total += t;
+                    if (row.Count > COL_CATALOG_AVAILABLE && int.TryParse(row[COL_CATALOG_AVAILABLE]?.ToString(), out int a)) available += a;
+                }
+            }
+
+            // 2. Рахуємо книги на руках та боржників (Видачі)
+            var borrowings = await GetAllBorrowingsAsync();
+            int overdue = 0, borrowed = 0;
+            if (borrowings != null)
+            {
+                foreach (var row in borrowings)
+                {
+                    string returnDate = row.Count > COL_BORROW_RETURNDATE ? row[COL_BORROW_RETURNDATE]?.ToString() ?? "" : "";
+
+                    if (string.IsNullOrWhiteSpace(returnDate)) // Якщо немає дати повернення - книга на руках
+                    {
+                        borrowed++;
+                        string dueDateStr = row.Count > COL_BORROW_DUEDATE ? row[COL_BORROW_DUEDATE]?.ToString() ?? "" : "";
+
+                        // Перевіряємо дедлайн (чи протерміновано)
+                        if (DateTime.TryParseExact(dueDateStr, "dd.MM.yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dueDate))
+                        {
+                            if (dueDate.Date < DateTime.Now.Date)
+                            {
+                                overdue++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Рахуємо чергу запитів
+            int pending = 0;
+            try
+            {
+                var request = _service!.Spreadsheets.Values.Get(SpreadsheetId, "Запити!A2:A");
+                var response = await request.ExecuteAsync();
+                if (response.Values != null) pending = response.Values.Count;
+            }
+            catch { }
+
+            return (total, available, borrowed, overdue, pending);
+        }
+        // НОВИЙ МЕТОД: Отримання списку боржників
+        public static async Task<List<(string Title, string Name, string Contact, string DueDate)>> GetOverdueBorrowingsAsync()
+        {
+            var result = new List<(string Title, string Name, string Contact, string DueDate)>();
+            var borrowings = await GetAllBorrowingsAsync();
+            if (borrowings == null || borrowings.Count <= 1) return result;
+
+            foreach (var row in borrowings.Skip(1)) // Пропускаємо заголовок (1-й рядок)
+            {
+                string returnDate = row.Count > COL_BORROW_RETURNDATE ? row[COL_BORROW_RETURNDATE]?.ToString() ?? "" : "";
+
+                if (string.IsNullOrWhiteSpace(returnDate)) // Якщо книгу ще не повернули
+                {
+                    string dueDateStr = row.Count > COL_BORROW_DUEDATE ? row[COL_BORROW_DUEDATE]?.ToString() ?? "" : "";
+
+                    if (DateTime.TryParseExact(dueDateStr, "dd.MM.yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dueDate))
+                    {
+                        if (dueDate.Date < DateTime.Now.Date) // Якщо дедлайн вже минув
+                        {
+                            string title = row.Count > COL_BORROW_TITLE ? row[COL_BORROW_TITLE]?.ToString() ?? "Невідомо" : "Невідомо";
+                            string realName = row.Count > COL_BORROW_REALNAME ? row[COL_BORROW_REALNAME]?.ToString() ?? "" : "";
+                            string tgName = row.Count > COL_BORROW_TGNAME ? row[COL_BORROW_TGNAME]?.ToString() ?? "" : "";
+                            string contact = row.Count > COL_BORROW_CONTACT ? row[COL_BORROW_CONTACT]?.ToString() ?? "Не вказано" : "Не вказано";
+
+                            // Формуємо красиве ім'я (Справжнє ім'я + Нікнейм)
+                            string fullName = string.IsNullOrWhiteSpace(realName) || realName == "Без імені" ? tgName : $"{realName} ({tgName})";
+                            if (string.IsNullOrWhiteSpace(fullName)) fullName = "Невідомий читач";
+
+                            result.Add((title, fullName, contact, dueDateStr));
+                        }
+                    }
+                }
+            }
+            return result;
+        }
     }
 }

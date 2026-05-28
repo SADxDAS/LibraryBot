@@ -233,5 +233,108 @@ namespace LibraryBot.Commands
             SessionManager.UserStates[chatId] = UserState.WaitingForManualReturnSearchQuery;
             await botClient.SendMessage(chatId, "🔍 Введіть назву книги або автора для пошуку серед книг, які зараз знаходяться НА РУКАХ:", cancellationToken: cancellationToken);
         }
+        public class MyProfileCommand : ICommand
+        {
+            public string[] Triggers => new[] { "/profile", "👤 Мій профіль" };
+
+            public async Task ExecuteAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+            {
+                long chatId = message.Chat.Id;
+                SessionManager.ClearSession(chatId);
+
+                // Показуємо, що бот думає, поки вантажить дані
+                var loadingMsg = await botClient.SendMessage(chatId, "⏳ Формую вашу читацьку картку...", cancellationToken: cancellationToken);
+
+                var profileData = await GoogleSheetsService.GetUserProfileAsync(chatId);
+
+                // ГЕЙМІФІКАЦІЯ: Визначаємо ранг користувача
+                string rank = "Новачок 🌱";
+                if (profileData.ReadCount >= 20) rank = "Бібліотечний Магістр 🧙‍♂️";
+                else if (profileData.ReadCount >= 10) rank = "Експерт 🦉";
+                else if (profileData.ReadCount >= 5) rank = "Книголюб 📚";
+                else if (profileData.ReadCount >= 1) rank = "Читач 📖";
+
+                string tgName = message.Chat.FirstName ?? "Читач";
+
+                string text = $"👤 <b>Профіль: {tgName}</b>\n";
+                text += $"🏆 Звання: <b>{rank}</b>\n";
+                text += $"📖 Прочитано книг: <b>{profileData.ReadCount}</b>\n";
+                text += $"⏳ Зараз на руках: <b>{profileData.CurrentlyReadingCount}</b>\n\n";
+
+                if (profileData.CurrentlyReadingCount > 0)
+                {
+                    text += "<b>Зараз ви читаєте:</b>\n";
+                    foreach (var b in profileData.CurrentBooks) text += $"🔸 <i>{b}</i>\n";
+                    text += "\n";
+                }
+
+                if (profileData.ReadCount > 0)
+                {
+                    text += "<b>Ваша історія прочитаного:</b>\n";
+                    // Беремо останні 10 книг, щоб повідомлення не було гігантським
+                    var recentRead = System.Linq.Enumerable.Reverse(profileData.ReadBooks).Take(10);
+                    foreach (var b in recentRead) text += $"✅ <i>{b}</i>\n";
+
+                    if (profileData.ReadCount > 10)
+                        text += $"<i>...та ще {profileData.ReadCount - 10} книг(и)</i>\n";
+                }
+                else
+                {
+                    text += "<i>Ви ще не прочитали жодної книги з нашої бібліотеки. Час це виправити! 😉</i>";
+                }
+
+                // Видаляємо повідомлення "Формую..." і надсилаємо готовий красивий профіль
+                await botClient.DeleteMessage(chatId, loadingMsg.MessageId, cancellationToken);
+                await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+            }
+        }
+        public class AdminStatsCommand : ICommand
+        {
+            public string[] Triggers => new[] { "/stats", "📊 Статистика" };
+
+            public async Task ExecuteAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+            {
+                long chatId = message.Chat.Id;
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+
+                SessionManager.ClearSession(chatId);
+
+                var loadingMsg = await botClient.SendMessage(chatId, "⏳ Збираю статистику...", cancellationToken: cancellationToken);
+
+                var stats = await GoogleSheetsService.GetLibraryStatisticsAsync();
+
+                string text = "📊 <b>Статистика Бібліотеки</b>\n\n";
+                text += $"📚 Загальний книжковий фонд: <b>{stats.TotalBooks}</b> прим.\n";
+                text += $"🟢 Доступно на полицях: <b>{stats.AvailableBooks}</b> прим.\n";
+                text += $"🤝 На руках у читачів: <b>{stats.BorrowedBooks}</b> прим.\n\n";
+
+                if (stats.OverdueBooks > 0)
+                    text += $"⚠️ Боржники (Протерміновано): <b>{stats.OverdueBooks}</b> ❗️\n";
+                else
+                    text += $"✅ Боржники (Протерміновано): <b>0</b>\n";
+
+                if (stats.PendingRequests > 0)
+                    text += $"📩 Необроблені запити в черзі: <b>{stats.PendingRequests}</b> 🔔\n";
+                else
+                    text += $"📩 Необроблені запити: <b>0</b>\n";
+
+                await botClient.DeleteMessage(chatId, loadingMsg.MessageId, cancellationToken);
+
+                // Якщо є боржники - додаємо інлайн-кнопку під повідомленням
+                if (stats.OverdueBooks > 0)
+                {
+                    var inlineKeyboard = new Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(new[]
+                    {
+                    Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton.WithCallbackData("🚨 Показати боржників", "view_overdue")
+                });
+                    await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: inlineKeyboard, cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    // Якщо боржників немає, просто відправляємо текст
+                    await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, cancellationToken: cancellationToken);
+                }
+            }
+        }
     }
 }
