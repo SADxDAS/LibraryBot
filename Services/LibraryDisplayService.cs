@@ -157,7 +157,18 @@ namespace LibraryBot.Services
                     ? $"Доступно {disponible} | Читають {reading}"
                     : (disponible > 0 ? "Доступна" : "Читають");
 
-                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n🎭 Жанр: {genre}\n📊 Статус: {statusIcon} {statusText}";
+                // Чи доступна книга для обміну (буккросингу)
+                string exchange = item.Data.Count > GoogleSheetsService.COL_CATALOG_EXCHANGE
+                    ? item.Data[GoogleSheetsService.COL_CATALOG_EXCHANGE]?.ToString()?.Trim() ?? "Так"
+                    : "Так";
+                bool isExchangeable = !exchange.Equals("Ні", StringComparison.OrdinalIgnoreCase);
+                string exchangeLine = !isExchangeable
+                    ? "🔄 Обмін: 🚫 Не обмінюється"
+                    : (disponible > 0
+                        ? "🔄 Обмін: ✅ Доступна для обміну"
+                        : "🔄 Обмін: 🟡 Можливий, але всі примірники на руках");
+
+                string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n🎭 Жанр: {genre}\n📊 Статус: {statusIcon} {statusText}\n{exchangeLine}";
 
                 var keyboardButtons = new List<InlineKeyboardButton[]>();
 
