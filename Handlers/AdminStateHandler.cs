@@ -65,12 +65,12 @@ namespace LibraryBot.Handlers
                 {
                     SessionManager.UserStates[chatId] = UserState.WaitingForAddBookDuplicateCheck;
 
-                    string warning = $"⚠️ **Знайдено схожі книги!**\nУ каталозі вже є книги з ідентичною або дуже схожою назвою:\n\n";
+                    string warning = $"⚠️ <b>Знайдено схожі книги!</b>\nУ каталозі вже є книги з ідентичною або дуже схожою назвою:\n\n";
 
                     // Беремо унікальні та залишаємо перші 5
                     foreach (var b in System.Linq.Enumerable.Take(System.Linq.Enumerable.Distinct(similarBooks), 5))
                     {
-                        warning += $"📖 {b}\n";
+                        warning += $"📖 {TextUtils.EscapeHtml(b)}\n";
                     }
                     warning += "\nВиберіть, що робити далі:";
 
@@ -82,7 +82,7 @@ namespace LibraryBot.Handlers
                     })
                     { ResizeKeyboard = true };
 
-                    await botClient.SendMessage(chatId, warning, parseMode: ParseMode.Markdown, replyMarkup: kb, cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, warning, parseMode: ParseMode.Html, replyMarkup: kb, cancellationToken: cancellationToken);
                     return true;
                 }
 
@@ -130,7 +130,7 @@ namespace LibraryBot.Handlers
                         bool updated = await GoogleSheetsService.UpdateBookInCatalogAsync(rowIndex, t, a, g, e, ava + 1, tot + 1);
 
                         if (updated)
-                            await botClient.SendMessage(chatId, $"✅ Кількість книги **{t}** успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                            await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                         else
                             await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                     }
@@ -212,12 +212,12 @@ namespace LibraryBot.Handlers
                 if (success)
                 {
                     string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
-                    await botClient.SendMessage(chatId, $"✅ Книгу **{session.Title}** ({qty} шт.) успішно додано!\nСтатус: {exchText}", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"✅ Книгу <b>{TextUtils.EscapeHtml(session.Title)}</b> ({qty} шт.) успішно додано!\nСтатус: {exchText}", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 }
                 else
                 {
                     // Рятуємо користувача від невідомості
-                    await botClient.SendMessage(chatId, "❌ **Помилка на стороні сервера Google Sheets.**\nНе вдалося додати книгу. Можливо, сервіс тимчасово недоступний. Спробуйте ще раз через хвилину.", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, "❌ <b>Помилка на стороні сервера.</b>\nНе вдалося додати книгу. Можливо, сервіс тимчасово недоступний. Спробуйте ще раз через хвилину.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 }
 
                 return true;
@@ -265,7 +265,7 @@ namespace LibraryBot.Handlers
                     new KeyboardButton[] { "❌ Скасувати дію" } 
                 }) { ResizeKeyboard = true };
 
-                await botClient.SendMessage(chatId, $"🔢 **Редагування кількості примірників**\nЗараз у бібліотеці всього: **{session.CurrentTotal}** шт. (з них доступно для видачі: {session.CurrentAvailable})\n\nОберіть дію за допомогою кнопок або введіть точну загальну кількість вручну:", parseMode: ParseMode.Markdown, replyMarkup: kb, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, $"🔢 <b>Редагування кількості примірників</b>\nЗараз у бібліотеці всього: <b>{session.CurrentTotal}</b> шт. (з них доступно для видачі: {session.CurrentAvailable})\n\nОберіть дію за допомогою кнопок або введіть точну загальну кількість вручну:", parseMode: ParseMode.Html, replyMarkup: kb, cancellationToken: cancellationToken);
                 return true;
             }
             // НОВИЙ БЛОК: Обробка кнопок кількості
@@ -343,9 +343,9 @@ namespace LibraryBot.Handlers
                 SessionManager.ClearSession(chatId);
 
                 if (updated) 
-                    await botClient.SendMessage(chatId, $"✅ Книгу **{session.Title}** успішно оновлено!\n📊 Новий баланс: {session.CurrentTotal} шт. (Доступно: {session.CurrentAvailable})", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"✅ Книгу <b>{TextUtils.EscapeHtml(session.Title)}</b> успішно оновлено!\n📊 Новий баланс: {session.CurrentTotal} шт. (Доступно: {session.CurrentAvailable})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 else 
-                    await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 return true;
             }
 
@@ -404,8 +404,11 @@ namespace LibraryBot.Handlers
                 // 1. Записуємо в лог обміну
                 await GoogleSheetsService.AddExchangeLogAsync(session.OldBookTitle, session.NewBookTitle, session.ReaderName);
 
-                // 2. Списуємо стару книгу з балансу за точним індексом рядка
-                await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle);
+                // 2. Списуємо стару книгу з балансу за точним індексом рядка (у критичній секції книги)
+                using (await AsyncKeyedLock.LockAsync($"book:{session.OldBookRowIndex}", cancellationToken))
+                {
+                    await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle);
+                }
 
                 // 3. Додаємо нову книгу (передаємо вибраний exchangeStatus замість захардкодженного "Так", кількість 1 шт)
                 await GoogleSheetsService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, "Доступна", exchangeStatus, 1);
@@ -413,9 +416,9 @@ namespace LibraryBot.Handlers
                 SessionManager.ClearSession(chatId);
 
                 string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
-                string successText = $"✅ **Обмін успішно завершено!**\n\n📖 Стара книга '**{session.OldBookTitle}**' списана з балансу.\n✨ Нова книга '**{session.NewBookTitle}**' додана до каталогу.\n📊 Статус обміну: *{exchText}*\n🗂 Запис внесено в аркуш 'Обмін'.";
+                string successText = $"✅ <b>Обмін успішно завершено!</b>\n\n📖 Стара книга '<b>{TextUtils.EscapeHtml(session.OldBookTitle)}</b>' списана з балансу.\n✨ Нова книга '<b>{TextUtils.EscapeHtml(session.NewBookTitle)}</b>' додана до каталогу.\n📊 Статус обміну: <i>{exchText}</i>\n🗂 Запис внесено в аркуш 'Обмін'.";
 
-                await botClient.SendMessage(chatId, successText, parseMode: ParseMode.Markdown, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, successText, parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 return true;
             }            // 5. РУЧНА ВИДАЧА ТА ПОВЕРНЕННЯ
             if (state == UserState.WaitingForManualSearchQuery)
@@ -435,14 +438,22 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminSessions[chatId];
                 session.ReaderContact = text;
 
-                await GoogleSheetsService.AddBorrowingAsync(session.BookId!, session.ReaderName!, "Офлайн читач", session.ReaderContact!, 0, DateTime.Now.AddDays(30));
-
-                // БУЛО: await GoogleSheetsService.UpdateBookStatusAsync(session.BookId!, "Читають");
-                // СТАЛО: Робимо -1 до доступних книг!
-                await GoogleSheetsService.ChangeAvailableCountAsync(session.CatalogRowIndex, -1);
-
-                SessionManager.ClearSession(chatId);
-                await botClient.SendMessage(chatId, $"✅ Готово! Книга '**{session.BookId}**' видана читачу **{session.ReaderName}** ({session.ReaderContact}).", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                // Атомарно списуємо примірник у критичній секції книги: поки адмін вводив дані читача,
+                // інший адмін міг видати останній примірник. Видаємо борровінг ЛИШЕ якщо списання вдалося.
+                using (await AsyncKeyedLock.LockAsync($"book:{session.CatalogRowIndex}", cancellationToken))
+                {
+                    if (await GoogleSheetsService.TryDecrementAvailableAsync(session.CatalogRowIndex))
+                    {
+                        await GoogleSheetsService.AddBorrowingAsync(session.BookId!, session.ReaderName!, "Офлайн читач", session.ReaderContact!, 0, DateTime.Now.AddDays(30));
+                        SessionManager.ClearSession(chatId);
+                        await botClient.SendMessage(chatId, $"✅ Готово! Книга '<b>{TextUtils.EscapeHtml(session.BookId)}</b>' видана читачу <b>{TextUtils.EscapeHtml(session.ReaderName)}</b> ({TextUtils.EscapeHtml(session.ReaderContact)}).", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        SessionManager.ClearSession(chatId);
+                        await botClient.SendMessage(chatId, $"😔 Усі примірники книги '<b>{TextUtils.EscapeHtml(session.BookId)}</b>' вже на руках — видачу не виконано.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+                }
                 return true;
             }
             if (state == UserState.WaitingForManualReturnSearchQuery)

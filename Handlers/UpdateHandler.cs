@@ -40,6 +40,43 @@ namespace LibraryBot.Handlers
 
         public static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
+            long? userId = update.CallbackQuery?.Message?.Chat.Id ?? update.Message?.Chat.Id;
+
+            // АНТИ-ФЛУД: відсікаємо спам ДО будь-якої роботи з БД чи блокувань (найдешевший шлях).
+            if (userId is long id)
+            {
+                var decision = RateLimiter.Check(id, SessionManager.AdminIds.Contains(id));
+                switch (decision)
+                {
+                    case RateDecision.FirstThrottle:
+                        // Попереджаємо ОДИН раз, далі — тиша.
+                        try { await botClient.SendMessage(id, "⏳ Занадто багато запитів. Будь ласка, зачекайте кілька секунд.", cancellationToken: cancellationToken); }
+                        catch { /* користувач міг заблокувати бота — ігноруємо */ }
+                        return;
+                    case RateDecision.Throttled:
+                    case RateDecision.GlobalOverload:
+                        return; // тихо відкидаємо, щоб не підсилювати атаку
+                }
+            }
+
+            // Серіалізуємо обробку в межах ОДНОГО користувача: його повідомлення/натискання
+            // оброблюються по черзі, тож швидкі подвійні натискання не псують його стан сесії.
+            // РІЗНІ користувачі мають різні ключі → працюють паралельно, у різних потоках.
+            if (userId is long uid)
+            {
+                using (await AsyncKeyedLock.LockAsync($"user:{uid}", cancellationToken))
+                {
+                    await RouteUpdateAsync(botClient, update, cancellationToken);
+                }
+            }
+            else
+            {
+                await RouteUpdateAsync(botClient, update, cancellationToken);
+            }
+        }
+
+        private static async Task RouteUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        {
             // Обробка інлайн-кнопок
             if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
             {
@@ -57,13 +94,10 @@ namespace LibraryBot.Handlers
             string messageText = message.Text?.Trim() ?? "";
 
             // 1. ПЕРЕВІРЯЄМО, ЧИ ЦЕ ТЕКСТ КОМАНДИ МЕНЮ
-            // Шукаємо першу команду, в масиві `Triggers` якої є текст, що надіслав користувач
             var command = _commands.FirstOrDefault(c => c.Triggers.Contains(messageText));
 
             if (command != null)
             {
-                // ЯКЩО ЗНАЙШЛИ: Команда сама очистить сесію та виконає свої дії.
-                // Сюди код зайде і залізобетонно перерве будь-яку стару дію.
                 await command.ExecuteAsync(botClient, message, cancellationToken);
                 return;
             }
@@ -80,8 +114,21 @@ namespace LibraryBot.Handlers
             {
                 if (await UserStateHandler.HandleAsync(botClient, message, currentState, cancellationToken)) return;
             }
-        }
 
+            // 3. ДІЯ ЗА ЗАМОВЧУВАННЯМ: АВТОМАТИЧНИЙ ПОШУК
+            // Якщо повідомлення дійшло сюди (не команда і немає активного стану),
+            // бот автоматично вважає це запитом на пошук книги.
+            if (!string.IsNullOrEmpty(messageText))
+            {
+                string telegramName = message.Chat.FirstName ?? "Без імені";
+                if (!string.IsNullOrEmpty(message.Chat.Username))
+                {
+                    telegramName += $" (@{message.Chat.Username})";
+                }
+
+                await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, telegramName, cancellationToken);
+            }
+        }
         public static Task HandleErrorAsync(ITelegramBotClient botClient, System.Exception exception, CancellationToken cancellationToken)
         {
             System.Console.WriteLine($"Помилка Telegram API: {exception.Message}");

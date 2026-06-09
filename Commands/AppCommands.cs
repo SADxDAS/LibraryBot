@@ -259,7 +259,7 @@ namespace LibraryBot.Commands
 
             string tgName = message.Chat.FirstName ?? "Читач";
 
-            string text = $"👤 <b>Профіль: {tgName}</b>\n";
+            string text = $"👤 <b>Профіль: {TextUtils.EscapeHtml(tgName)}</b>\n";
             text += $"🏆 Звання: <b>{rank}</b>\n";
             text += $"📖 Прочитано книг: <b>{profileData.ReadCount}</b>\n";
             text += $"⏳ Зараз на руках: <b>{profileData.CurrentlyReadingCount}</b>\n\n";
@@ -267,7 +267,7 @@ namespace LibraryBot.Commands
             if (profileData.CurrentlyReadingCount > 0)
             {
                 text += "<b>Зараз ви читаєте:</b>\n";
-                foreach (var b in profileData.CurrentBooks) text += $"🔸 <i>{b}</i>\n";
+                foreach (var b in profileData.CurrentBooks) text += $"🔸 <i>{TextUtils.EscapeHtml(b)}</i>\n";
                 text += "\n";
             }
 
@@ -276,7 +276,7 @@ namespace LibraryBot.Commands
                 text += "<b>Ваша історія прочитаного:</b>\n";
                 // Беремо останні 10 книг, щоб повідомлення не було гігантським
                 var recentRead = System.Linq.Enumerable.Reverse(profileData.ReadBooks).Take(10);
-                foreach (var b in recentRead) text += $"✅ <i>{b}</i>\n";
+                foreach (var b in recentRead) text += $"✅ <i>{TextUtils.EscapeHtml(b)}</i>\n";
 
                 if (profileData.ReadCount > 10)
                     text += $"<i>...та ще {profileData.ReadCount - 10} книг(и)</i>\n";
@@ -373,10 +373,10 @@ namespace LibraryBot.Commands
 
             foreach (var item in pageItems)
             {
-                text += $"👤 <b>{count}. {item.Name}</b>\n";
-                text += $"📖 Книга: {item.Title}\n";
-                text += $"📞 Контакт: <code>{item.Contact}</code>\n";
-                text += $"📅 Повернути до: {item.DueDate}\n";
+                text += $"👤 <b>{count}. {TextUtils.EscapeHtml(item.Name)}</b>\n";
+                text += $"📖 Книга: {TextUtils.EscapeHtml(item.Title)}\n";
+                text += $"📞 Контакт: <code>{TextUtils.EscapeHtml(item.Contact)}</code>\n";
+                text += $"📅 Повернути до: {TextUtils.EscapeHtml(item.DueDate)}\n";
                 text += "➖➖➖➖➖➖➖➖\n";
                 count++;
             }

@@ -98,10 +98,10 @@ namespace LibraryBot.Handlers
                         InlineKeyboardButton.WithCallbackData("❌ Відхилити", $"req_rej_{request.RequestId}")
                     });
 
-                    string adminMsg = $"📥 **ЗАПИТ НА ПОВЕРНЕННЯ**\n\n👤 Читач: {tgName}\n📖 Книга: **{title}**";
+                    string adminMsg = $"📥 <b>ЗАПИТ НА ПОВЕРНЕННЯ</b>\n\n👤 Читач: {TextUtils.EscapeHtml(tgName)}\n📖 Книга: <b>{TextUtils.EscapeHtml(title)}</b>";
                     foreach (var adminId in SessionManager.AdminIds)
                     {
-                        try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Markdown, replyMarkup: adminKeyboard); }
+                        try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
                         catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                     }
 
@@ -115,6 +115,9 @@ namespace LibraryBot.Handlers
 
                 bool isApprove = callbackQuery.Data.StartsWith("req_apr_");
                 string reqId = callbackQuery.Data.Substring(8);
+
+                // Критична секція по запиту: два адміни (або подвійний тап) не оброблять його двічі.
+                using var reqLock = await AsyncKeyedLock.LockAsync($"request:{reqId}", cancellationToken);
 
                 var request = await GoogleSheetsService.GetPendingRequestAsync(reqId);
                 if (request == null)
@@ -139,7 +142,7 @@ namespace LibraryBot.Handlers
                             }
                         });
 
-                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", parseMode: ParseMode.Html, replyMarkup: choiceKeyboard, cancellationToken: cancellationToken);
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", parseMode: ParseMode.Html, replyMarkup: choiceKeyboard, cancellationToken: cancellationToken);
                         return;
                     }
 
@@ -147,32 +150,44 @@ namespace LibraryBot.Handlers
 
                     if (request.Type == RequestType.Borrow)
                     {
-                        DateTime dueDate = DateTime.Now.AddDays(request.BorrowDays);
-                        await GoogleSheetsService.AddBorrowingAsync(request.BookTitle, request.RealName, request.UserName, request.Contact ?? "", request.UserId, dueDate);
-                        await GoogleSheetsService.ChangeAvailableCountAsync(request.CatalogRowIndex, -1);
-                        await botClient.SendMessage(request.UserId, $"🎉 **Ваш запит схвалено!**\nКнигу **{request.BookTitle}** закріплено за вами.", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                        // Критична секція по книзі + перевірка наявності В МОМЕНТ схвалення:
+                        // поки запит чекав, примірники могли розібрати — тоді видачу не виконуємо.
+                        using var bookLock = await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken);
+                        if (await GoogleSheetsService.TryDecrementAvailableAsync(request.CatalogRowIndex))
+                        {
+                            DateTime dueDate = DateTime.Now.AddDays(request.BorrowDays);
+                            await GoogleSheetsService.AddBorrowingAsync(request.BookTitle, request.RealName, request.UserName, request.Contact ?? "", request.UserId, dueDate);
+                            await botClient.SendMessage(request.UserId, $"🎉 <b>Ваш запит схвалено!</b>\nКнигу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b> закріплено за вами.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        }
+                        else
+                        {
+                            await botClient.SendMessage(request.UserId, $"😔 На жаль, поки ваш запит на книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b> розглядався, всі примірники вже розібрали.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                            try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Немає вільних примірників — видачу не виконано.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
+                        }
                     }
                     else if (request.Type == RequestType.Return)
                     {
+                        using var bookLock = await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken);
                         await GoogleSheetsService.ChangeAvailableCountAsync(request.CatalogRowIndex, 1);
                         await GoogleSheetsService.LogReturnDateAsync(request.BookTitle, request.UserId);
-                        await botClient.SendMessage(request.UserId, $"✅ **Повернення підтверджено!**\nДякуємо, що повернули книгу **{request.BookTitle}**.", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                        await botClient.SendMessage(request.UserId, $"✅ <b>Повернення підтверджено!</b>\nДякуємо, що повернули книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b>.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     }
 
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + "\n\n✅ **СХВАЛЕНО**", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n✅ <b>СХВАЛЕНО</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
                 else
                 {
                     await GoogleSheetsService.DeletePendingRequestAsync(reqId);
 
+                    string safeTitle = TextUtils.EscapeHtml(request.BookTitle);
                     string rejectMsg = request.Type == RequestType.UserExchange
-                        ? $"❌ Ваш запит на обмін книги\n<b>{request.BookTitle}</b>\nбуло відхилено адміністратором."
+                        ? $"❌ Ваш запит на обмін книги\n<b>{safeTitle}</b>\nбуло відхилено адміністратором."
                         : (request.Type == RequestType.Borrow
-                            ? $"❌ Ваш запит на книгу\n{request.BookTitle}\nбуло відхилено адміністратором."
-                            : $"❌ Ваш запит на повернення книги\n{request.BookTitle}\nвідхилено.");
+                            ? $"❌ Ваш запит на книгу\n{safeTitle}\nбуло відхилено адміністратором."
+                            : $"❌ Ваш запит на повернення книги\n{safeTitle}\nвідхилено.");
 
                     await botClient.SendMessage(request.UserId, rejectMsg, parseMode: ParseMode.Html, cancellationToken: cancellationToken);
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + "\n\n❌ **ВІДХИЛЕНО**", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n❌ <b>ВІДХИЛЕНО</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
             }
             // ФІКС ТУТ: Розумне вирахування довжини текстового тригера кнопки статусу
@@ -184,6 +199,9 @@ namespace LibraryBot.Handlers
 
                 // Якщо увімкнено так - зрізаємо 11 літер, якщо ні - 10 літер
                 string reqId = canExchange ? callbackQuery.Data.Substring(11) : callbackQuery.Data.Substring(10);
+
+                // Критична секція по запиту: один запит обробляється лише раз.
+                using var reqLock = await AsyncKeyedLock.LockAsync($"request:{reqId}", cancellationToken);
 
                 var request = await GoogleSheetsService.GetPendingRequestAsync(reqId);
                 if (request == null)
@@ -197,10 +215,13 @@ namespace LibraryBot.Handlers
                 string exchangeStatus = canExchange ? "Так" : "Ні";
 
                 await GoogleSheetsService.AddBookToCatalogAsync(request.NewBookTitle, request.NewBookAuthor, request.NewBookGenre, "Доступна", exchangeStatus, 1);
-                await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(request.CatalogRowIndex, request.BookTitle);
+                using (await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken))
+                {
+                    await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(request.CatalogRowIndex, request.BookTitle);
+                }
                 await GoogleSheetsService.AddExchangeLogAsync(request.BookTitle, request.NewBookTitle, request.UserName);
 
-                await botClient.SendMessage(request.UserId, $"🎉 <b>Ваш запит на обмін схвалено!</b>\n\nВи можете забрати книгу <b>{request.BookTitle}</b>, а свою передати баристі. Дякуємо за обмін! 💚", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                await botClient.SendMessage(request.UserId, $"🎉 <b>Ваш запит на обмін схвалено!</b>\n\nВи можете забрати книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b>, а свою передати баристі. Дякуємо за обмін! 💚", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
 
                 string originalText = callbackQuery.Message!.Text ?? "";
                 if (originalText.Contains("\n\n🔄 Визначте статус обміну"))
@@ -209,7 +230,7 @@ namespace LibraryBot.Handlers
                 }
 
                 string finalStatusText = canExchange ? "СХВАЛЕНО (З можливістю обміну)" : "СХВАЛЕНО (Без подальшого обміну)";
-                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, originalText + $"\n\n✅ <b>{finalStatusText}</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + $"\n\n✅ <b>{finalStatusText}</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
             }
             else if (callbackQuery.Data.StartsWith("userex_sel_"))
             {
@@ -230,7 +251,11 @@ namespace LibraryBot.Handlers
                     }
 
                     string libBookTitle = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
-                    var session = SessionManager.UserExchangeSessions[chatId];
+                    if (!SessionManager.UserExchangeSessions.TryGetValue(chatId, out var session))
+                    {
+                        try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Сесію обміну вже завершено або застаріло. Почніть заново.", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                        return;
+                    }
                     session.LibraryBookTitle = libBookTitle;
                     session.LibraryBookRowIndex = rowIndex;
 
@@ -258,9 +283,9 @@ namespace LibraryBot.Handlers
                     });
 
                     string adminMsg = $"📩 <b>ЗАПИТ НА ОБМІН (БУККРОСИНГ)</b>\n\n" +
-                                      $"👤 Читач: {telegramName}\n" +
-                                      $"📥 <b>Принесе в бібліотеку:</b>\n📖 «{session.Title}» ({session.Author} / Жанр: {session.Genre})\n\n" +
-                                      $"📤 <b>Хоче забрати натомість:</b>\n📖 «{libBookTitle}»";
+                                      $"👤 Читач: {TextUtils.EscapeHtml(telegramName)}\n" +
+                                      $"📥 <b>Принесе в бібліотеку:</b>\n📖 «{TextUtils.EscapeHtml(session.Title)}» ({TextUtils.EscapeHtml(session.Author)} / Жанр: {TextUtils.EscapeHtml(session.Genre)})\n\n" +
+                                      $"📤 <b>Хоче забрати натомість:</b>\n📖 «{TextUtils.EscapeHtml(libBookTitle)}»";
 
                     foreach (var adminId in SessionManager.AdminIds)
                     {
@@ -270,7 +295,7 @@ namespace LibraryBot.Handlers
 
                     SessionManager.ClearSession(chatId);
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                    await botClient.SendMessage(chatId, $"⏳ Запит на обмін успішно надіслано адміністраторам!\n\nВи віддаєте: <b>{session.Title}</b>\nЗабираєте: <b>{libBookTitle}</b>\n\nДочекайтеся підтвердження баристи.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"⏳ Запит на обмін успішно надіслано адміністраторам!\n\nВи віддаєте: <b>{TextUtils.EscapeHtml(session.Title)}</b>\nЗабираєте: <b>{TextUtils.EscapeHtml(libBookTitle)}</b>\n\nДочекайтеся підтвердження баристи.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 }
             }
             else if (callbackQuery.Data.StartsWith("act_ext_"))
@@ -280,7 +305,7 @@ namespace LibraryBot.Handlers
 
                 if (success)
                 {
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "✅ **Термін здачі успішно подовжено на 1 місяць (30 днів)!**\nНаступного разу ви не зможете скористатися цією функцією. Приємного читання!", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "✅ <b>Термін здачі успішно подовжено на 1 місяць (30 днів)!</b>\nНаступного разу ви не зможете скористатися цією функцією. Приємного читання!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
                 else
                 {
@@ -301,7 +326,7 @@ namespace LibraryBot.Handlers
                     {
                         new InlineKeyboardButton[] { InlineKeyboardButton.WithCallbackData("✅ Так, видалити", $"conf_del_{rowIndex}"), InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"canc_del_{rowIndex}") }
                     });
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⚠️ Ви дійсно хочете безповоротно видалити книгу **{title}** з каталогу?", parseMode: ParseMode.Markdown, replyMarkup: confirmKeyboard, cancellationToken: cancellationToken);
+                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⚠️ Ви дійсно хочете безповоротно видалити книгу <b>{TextUtils.EscapeHtml(title)}</b> з каталогу?", parseMode: ParseMode.Html, replyMarkup: confirmKeyboard, cancellationToken: cancellationToken);
                 }
             }
             else if (callbackQuery.Data.StartsWith("conf_del_"))
@@ -316,15 +341,15 @@ namespace LibraryBot.Handlers
                     string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
                     bool deleted = await GoogleSheetsService.DeleteBookFromCatalogAsync(title);
                     if (deleted)
-                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу **{title}** успішно видалено з каталогу.", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{TextUtils.EscapeHtml(title)}</b> успішно видалено з каталогу.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     else
-                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Сталася помилка при видаленні книги **{title}**.", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Сталася помилка при видаленні книги <b>{TextUtils.EscapeHtml(title)}</b>.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
             }
             else if (callbackQuery.Data.StartsWith("canc_del_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
-                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Видалення скасовано.", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Видалення скасовано.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
             }
             else if (callbackQuery.Data.StartsWith("act_edit_"))
             {
@@ -357,7 +382,7 @@ namespace LibraryBot.Handlers
 
                     SessionManager.UserStates[chatId] = UserState.WaitingForEditBookTitle;
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                    await botClient.SendMessage(chatId, $"✏️ Редагуємо книгу: **{oldTitle}**\n\nВведіть НОВУ НАЗВУ (або відправте `-` щоб залишити без змін):", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"✏️ Редагуємо книгу: <b>{TextUtils.EscapeHtml(oldTitle)}</b>\n\nВведіть НОВУ НАЗВУ (або відправте <code>-</code> щоб залишити без змін):", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
             }
             else if (callbackQuery.Data.StartsWith("act_exch_"))
@@ -384,7 +409,7 @@ namespace LibraryBot.Handlers
                     SessionManager.UserStates[chatId] = UserState.WaitingForExchangeReaderName;
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                    await botClient.SendMessage(chatId, $"Selected: **{title}**.\n👤 Введіть Ім'я в Telegram (або контакт) читача, який робить обмін:", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"Selected: <b>{TextUtils.EscapeHtml(title)}</b>.\n👤 Введіть Ім'я в Telegram (або контакт) читача, який робить обмін:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
             }
             else if (callbackQuery.Data == "view_overdue")
@@ -399,26 +424,27 @@ namespace LibraryBot.Handlers
                     return;
                 }
 
-                string msg = "🚨 **СПИСОК БОРЖНИКІВ**\n\n";
+                string msg = "🚨 <b>СПИСОК БОРЖНИКІВ</b>\n\n";
                 int count = 1;
                 foreach (var item in overdueList)
                 {
-                    msg += $"👤 **{count}. {item.Name}**\n";
-                    msg += $"📖 Книга: {item.Title}\n";
-                    msg += $"📞 Контакт: `{item.Contact}`\n";
-                    msg += $"📅 Дедлайн був: {item.DueDate}\n";
+                    // Екрануємо дані користувача — імена/назви можуть містити < > & і ламати розмітку.
+                    msg += $"👤 <b>{count}. {TextUtils.EscapeHtml(item.Name)}</b>\n";
+                    msg += $"📖 Книга: {TextUtils.EscapeHtml(item.Title)}\n";
+                    msg += $"📞 Контакт: <code>{TextUtils.EscapeHtml(item.Contact)}</code>\n";
+                    msg += $"📅 Дедлайн був: {TextUtils.EscapeHtml(item.DueDate)}\n";
                     msg += "➖➖➖➖➖➖➖➖\n";
                     count++;
 
                     // Захист від занадто довгого повідомлення (ліміт Телеграму)
                     if (msg.Length > 3800)
                     {
-                        msg += "*(Показано не всіх боржників через ліміт символів)*";
+                        msg += "<i>(Показано не всіх боржників через ліміт символів)</i>";
                         break;
                     }
                 }
 
-                await botClient.SendMessage(chatId, msg, parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                await botClient.SendMessage(chatId, msg, parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
             }
             // Гортання сторінок для списку видач
@@ -441,10 +467,10 @@ namespace LibraryBot.Handlers
 
                 foreach (var item in pageItems)
                 {
-                    text += $"👤 <b>{count}. {item.Name}</b>\n";
-                    text += $"📖 Книга: {item.Title}\n";
-                    text += $"📞 Контакт: <code>{item.Contact}</code>\n";
-                    text += $"📅 Повернути до: {item.DueDate}\n";
+                    text += $"👤 <b>{count}. {TextUtils.EscapeHtml(item.Name)}</b>\n";
+                    text += $"📖 Книга: {TextUtils.EscapeHtml(item.Title)}\n";
+                    text += $"📞 Контакт: <code>{TextUtils.EscapeHtml(item.Contact)}</code>\n";
+                    text += $"📅 Повернути до: {TextUtils.EscapeHtml(item.DueDate)}\n";
                     text += "➖➖➖➖➖➖➖➖\n";
                     count++;
                 }
@@ -486,7 +512,7 @@ namespace LibraryBot.Handlers
                     SessionManager.UserStates[chatId] = UserState.WaitingForManualReaderName;
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                    await botClient.SendMessage(chatId, $"📖 Обрано: **{title}**.\n👤 Введіть ПІБ читача (офлайн користувача), якому видається книга:", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, $"📖 Обрано: <b>{TextUtils.EscapeHtml(title)}</b>.\n👤 Введіть ПІБ читача (офлайн користувача), якому видається книга:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
             }
             else if (callbackQuery.Data.StartsWith("act_man_r_"))
@@ -500,8 +526,11 @@ namespace LibraryBot.Handlers
                 {
                     string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
-                    await GoogleSheetsService.ChangeAvailableCountAsync(rowIndex, 1);
-                    await GoogleSheetsService.LogReturnDateAsync(title);
+                    using (await AsyncKeyedLock.LockAsync($"book:{rowIndex}", cancellationToken))
+                    {
+                        await GoogleSheetsService.ChangeAvailableCountAsync(rowIndex, 1);
+                        await GoogleSheetsService.LogReturnDateAsync(title);
+                    }
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     await botClient.SendMessage(chatId, $"✅ Книгу '<b>{title}</b>' успішно повернуто вручну від офлайн-користувача! Статус оновлено.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
@@ -510,7 +539,12 @@ namespace LibraryBot.Handlers
             else if (callbackQuery.Data.StartsWith("period_"))
             {
                 int days = int.Parse(callbackQuery.Data.Split('_')[1]);
-                var session = SessionManager.BorrowSessions[chatId];
+                // Захист від подвійного натискання: перший дотик уже міг очистити сесію.
+                if (!SessionManager.BorrowSessions.TryGetValue(chatId, out var session))
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Цю дію вже оброблено або сесію завершено. Оберіть книгу заново.", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
 
                 string bookTitle = session.BookTitle ?? "Невідома книга";
                 string contact = session.Contact ?? "Не вказано";
@@ -538,15 +572,15 @@ namespace LibraryBot.Handlers
                     InlineKeyboardButton.WithCallbackData("❌ Відхилити", $"req_rej_{request.RequestId}")
                 });
 
-                string adminMsg = $"📩 **НОВИЙ ЗАПИТ НА ВИДАЧУ**\n\n👤 Читач: **{realName}**\n🔗 Профіль: {telegramName}\n📞 Контакт: {contact}\n📖 Книга: **{bookTitle}**\n⏳ Термін: {days} днів";
+                string adminMsg = $"📩 <b>НОВИЙ ЗАПИТ НА ВИДАЧУ</b>\n\n👤 Читач: <b>{TextUtils.EscapeHtml(realName)}</b>\n🔗 Профіль: {TextUtils.EscapeHtml(telegramName)}\n📞 Контакт: {TextUtils.EscapeHtml(contact)}\n📖 Книга: <b>{TextUtils.EscapeHtml(bookTitle)}</b>\n⏳ Термін: {days} днів";
                 foreach (var adminId in SessionManager.AdminIds)
                 {
-                    try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Markdown, replyMarkup: adminKeyboard); }
+                    try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
                     catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                 }
 
                 SessionManager.ClearSession(chatId);
-                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⏳ Запит на книгу **{bookTitle}** (на {days} днів) відправлено. Очікуйте!", parseMode: ParseMode.Markdown, cancellationToken: cancellationToken);
+                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⏳ Запит на книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b> (на {days} днів) відправлено. Очікуйте!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
             }
 
             try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); }

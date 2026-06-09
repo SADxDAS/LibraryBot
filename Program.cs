@@ -6,6 +6,7 @@ using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types.Enums;
 using DotNetEnv;
+using Microsoft.EntityFrameworkCore;
 using LibraryBot.Handlers;
 using LibraryBot.Services;
 
@@ -17,6 +18,46 @@ namespace LibraryBot
         {
             // 1. Завантажуємо локальний .env (якщо він є. На Railway його немає - і це ок)
             try { Env.Load(); } catch { }
+
+            // 0. РЕЖИМ МІГРАЦІЇ: dotnet run -- migrate
+            //    Одноразово переносить дані зі старих Google Sheets у PostgreSQL і виходить.
+            if (args.Length > 0 && args[0].Equals("migrate", StringComparison.OrdinalIgnoreCase))
+            {
+                await SheetsMigrationService.RunAsync();
+                return;
+            }
+
+            // РЕЖИМ ПЕРЕВІРКИ БД: dotnet run -- dbtest
+            //    Швидко перевіряє з'єднання з PostgreSQL (без читання таблиць) і виходить.
+            if (args.Length > 0 && args[0].Equals("dbtest", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    int n;
+                    using (var db = new LibraryBot.Data.AppDbContext())
+                        n = await db.Books.CountAsync();
+                    long cold = sw.ElapsedMilliseconds;
+                    Console.WriteLine($"✅ З'єднання з PostgreSQL працює. Книг у БД: {n}");
+                    Console.WriteLine($"   Перший запит (холодний, +відкриття з'єднання): {cold} мс");
+
+                    // Кілька "теплих" запитів — мають переюзати з'єднання з пулу (швидко).
+                    const int warmRuns = 10;
+                    sw.Restart();
+                    for (int i = 0; i < warmRuns; i++)
+                        using (var db = new LibraryBot.Data.AppDbContext())
+                            await db.Books.CountAsync();
+                    long warmTotal = sw.ElapsedMilliseconds;
+                    Console.WriteLine($"   {warmRuns} теплих запитів: {warmTotal} мс (≈ {warmTotal / (double)warmRuns:F1} мс/запит з пулом)");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ З'єднання не вдалося: {ex.Message}");
+                    for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+                        Console.WriteLine($"   ↳ {inner.GetType().Name}: {inner.Message}");
+                }
+                return;
+            }
 
             Console.WriteLine("🔄 Перевірка налаштувань (Environment Variables)...");
 

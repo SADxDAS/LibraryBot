@@ -46,9 +46,9 @@ namespace LibraryBot.Services
             {
                 var row = item.RowData;
 
-                string title = row.Count > 0 ? row[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = row.Count > 1 ? row[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
-                string genre = row.Count > 2 ? row[2]?.ToString() ?? "Не вказано" : "Не вказано";
+                string title = TextUtils.EscapeHtml(row.Count > 0 ? row[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(row.Count > 1 ? row[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
+                string genre = TextUtils.EscapeHtml(row.Count > 2 ? row[2]?.ToString() ?? "Не вказано" : "Не вказано");
                 string exchange = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так";
 
                 int disponible = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
@@ -86,6 +86,36 @@ namespace LibraryBot.Services
                 await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
         }
 
+        /// <summary>
+        /// Спільний універсальний нечіткий пошук по каталогу.
+        /// Повертає книги, відсортовані за релевантністю (найточніші — першими).
+        /// RowIndex враховує legacy-зсув (+2) як і в решті коду.
+        /// </summary>
+        private static List<(int RowIndex, IList<object> Data)> FuzzyFind(IList<IList<object>> books, string query)
+        {
+            // Компілюємо (нормалізуємо + токенізуємо) запит ОДИН раз, а не для кожної книги.
+            var compiledQuery = BookSearch.Compile(query);
+
+            var scored = new List<(int RowIndex, IList<object> Data, double Score)>();
+            for (int i = 0; i < books.Count; i++)
+            {
+                var row = books[i];
+                if (row.Count == 0) continue;
+
+                string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                string author = row.Count > 1 ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
+
+                double score = compiledQuery.Score(title, author);
+                if (score > 0)
+                    scored.Add((i + 2, row, score));
+            }
+
+            return scored
+                .OrderByDescending(x => x.Score)
+                .Select(x => (x.RowIndex, x.Data))
+                .ToList();
+        }
+
         public static async Task SearchBooksAsync(ITelegramBotClient botClient, long chatId, string query, string telegramName, CancellationToken cancellationToken)
         {
             var books = await GoogleSheetsService.GetBooksAsync();
@@ -97,33 +127,8 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            string normalizedQuery = query.ToLower().Trim();
-
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0)
-                {
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString()?.ToLower() ?? "";
-                    string author = row.Count > 1 ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString()?.ToLower() ?? "" : "";
-
-                    // 1. Суворий пошук (якщо користувач ввів точно)
-                    bool exactMatch = title.Contains(normalizedQuery) || author.Contains(normalizedQuery);
-
-                    // 2. Fuzzy пошук (допускаємо 2 помилки, якщо слово довге)
-                    int distTitle = GoogleSheetsService.ComputeLevenshteinDistance(normalizedQuery, title);
-                    int distAuthor = GoogleSheetsService.ComputeLevenshteinDistance(normalizedQuery, author);
-
-                    // Якщо слово коротке (до 5 літер), вимагаємо ідеального збігу, для довших — дозволяємо 2 одруківки
-                    bool fuzzyMatch = (normalizedQuery.Length > 5 && (distTitle <= 2 || distAuthor <= 2));
-
-                    if (exactMatch || fuzzyMatch)
-                    {
-                        foundBooks.Add((i + 2, row));
-                    }
-                }
-            }
+            // Універсальний нечіткий пошук по словах, відсортований за релевантністю.
+            var foundBooks = FuzzyFind(books, query);
 
             if (foundBooks.Count == 0)
             {
@@ -137,9 +142,9 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
-                string genre = item.Data.Count > 2 ? item.Data[2]?.ToString() ?? "Не вказано" : "Не вказано";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
+                string genre = TextUtils.EscapeHtml(item.Data.Count > 2 ? item.Data[2]?.ToString() ?? "Не вказано" : "Не вказано");
 
                 int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
                 int total = item.Data.Count > 5 ? int.TryParse(item.Data[5]?.ToString(), out int t) ? t : 1 : 1;
@@ -191,7 +196,7 @@ namespace LibraryBot.Services
 
             foreach (var book in borrowedBooks)
             {
-                string text = $"📖 <b>{book.Title}</b>\n📊 Статус: 🔴 Знаходиться у вас";
+                string text = $"📖 <b>{TextUtils.EscapeHtml(book.Title)}</b>\n📊 Статус: 🔴 Знаходиться у вас";
                 var button = InlineKeyboardButton.WithCallbackData("📤 Повернути цю книгу", $"act_r_{book.CatalogRowIndex}");
                 var keyboard = new InlineKeyboardMarkup(new[] { new[] { button } });
                 await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
@@ -209,17 +214,7 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
-                {
-                    foundBooks.Add((i + 2, row));
-                }
-            }
+            var foundBooks = FuzzyFind(books, query);
 
             if (foundBooks.Count == 0)
             {
@@ -231,8 +226,8 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
 
                 string text = $"📖 <b>{title}</b>\n👤 Автор: {author}";
 
@@ -254,17 +249,7 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
-                {
-                    foundBooks.Add((i + 2, row));
-                }
-            }
+            var foundBooks = FuzzyFind(books, query);
 
             if (foundBooks.Count == 0)
             {
@@ -276,9 +261,9 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
-                string genre = item.Data.Count > 2 ? item.Data[2]?.ToString() ?? "Не вказано" : "Не вказано";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
+                string genre = TextUtils.EscapeHtml(item.Data.Count > 2 ? item.Data[2]?.ToString() ?? "Не вказано" : "Не вказано");
 
                 string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n🎭 Жанр: {genre}";
 
@@ -300,17 +285,7 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
-                {
-                    foundBooks.Add((i + 2, row));
-                }
-            }
+            var foundBooks = FuzzyFind(books, query);
 
             if (foundBooks.Count == 0)
             {
@@ -322,8 +297,8 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
 
                 string exchangeStatus = item.Data.Count > 3 ? item.Data[3]?.ToString()?.Trim() ?? "Так" : "Так";
                 int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
@@ -363,17 +338,7 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
-                {
-                    foundBooks.Add((i + 2, row));
-                }
-            }
+            var foundBooks = FuzzyFind(books, query);
 
             if (foundBooks.Count == 0)
             {
@@ -385,8 +350,8 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
 
                 int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
                 bool isAvailable = disponible > 0;
@@ -415,24 +380,15 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
+            // Лише видані книги (на руках), відсортовані за релевантністю.
+            var foundBooks = FuzzyFind(books, query)
+                .Where(item =>
                 {
-                    int disponible = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int d) ? d : 0 : 0;
-                    int total = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int t) ? t : 1 : 1;
-                    int reading = total - disponible;
-
-                    if (reading > 0)
-                    {
-                        foundBooks.Add((i + 2, row));
-                    }
-                }
-            }
+                    int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
+                    int total = item.Data.Count > 5 ? int.TryParse(item.Data[5]?.ToString(), out int t) ? t : 1 : 1;
+                    return total - disponible > 0;
+                })
+                .ToList();
 
             if (foundBooks.Count == 0)
             {
@@ -444,8 +400,8 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
 
                 string text = $"📖 <b>{title}</b>\n👤 Автор: {author}\n📊 Статус: 🔴 Читають";
 
@@ -466,17 +422,7 @@ namespace LibraryBot.Services
                 return;
             }
 
-            var foundBooks = new List<(int RowIndex, IList<object> Data)>();
-            for (int i = 0; i < books.Count; i++)
-            {
-                var row = books[i];
-                if (row.Count > 0 &&
-                    ((row[0]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
-                     (row.Count > 1 && row[1]?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)))
-                {
-                    foundBooks.Add((i + 2, row));
-                }
-            }
+            var foundBooks = FuzzyFind(books, query);
 
             if (foundBooks.Count == 0)
             {
@@ -488,8 +434,8 @@ namespace LibraryBot.Services
 
             foreach (var item in foundBooks.Take(5))
             {
-                string title = item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви";
-                string author = item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор";
+                string title = TextUtils.EscapeHtml(item.Data.Count > 0 ? item.Data[0]?.ToString() ?? "Без назви" : "Без назви");
+                string author = TextUtils.EscapeHtml(item.Data.Count > 1 ? item.Data[1]?.ToString() ?? "Невідомий автор" : "Невідомий автор");
 
                 int disponible = item.Data.Count > 4 ? int.TryParse(item.Data[4]?.ToString(), out int d) ? d : 0 : 0;
                 bool isAvailable = disponible > 0;

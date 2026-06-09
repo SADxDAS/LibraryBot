@@ -45,14 +45,14 @@ namespace LibraryBot.Services
 
                     if (daysLeft == 3)
                     {
-                        notificationMessage = $"⏳ **Час спливає!**\nЧерез 3 дні вам потрібно повернути книгу **{bookTitle}**.\n📅 Дедлайн: {dueDate:dd.MM.yyyy}";
+                        notificationMessage = $"⏳ <b>Час спливає!</b>\nЧерез 3 дні вам потрібно повернути книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b>.\n📅 Дедлайн: {dueDate:dd.MM.yyyy}";
                     }
                     else if (daysLeft == 0)
                     {
                         if (!isExtended)
                         {
                             // Якщо ще не подовжували — даємо кнопку
-                            notificationMessage = $"🚨 **Сьогодні останній день!**\nСьогодні вам потрібно повернути книгу **{bookTitle}** до бібліотеки.\n\nЯкщо ви не встигаєте, можете одноразово подовжити термін на 1 місяць 👇";
+                            notificationMessage = $"🚨 <b>Сьогодні останній день!</b>\nСьогодні вам потрібно повернути книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b> до бібліотеки.\n\nЯкщо ви не встигаєте, можете одноразово подовжити термін на 1 місяць 👇";
 
                             int sheetRowIndex = i + 2; // +2 бо індекс масиву починається з 0, і 1-й рядок це шапка таблиці
                             var button = InlineKeyboardButton.WithCallbackData("⏳ Подовжити на 1 місяць", $"act_ext_{sheetRowIndex}");
@@ -61,12 +61,12 @@ namespace LibraryBot.Services
                         else
                         {
                             // Якщо вже подовжували — просто вимагаємо повернути
-                            notificationMessage = $"🚨 **Сьогодні останній день!**\nСьогодні вам потрібно повернути книгу **{bookTitle}** до бібліотеки.\nВи вже використали своє право на подовження, тому чекаємо на вас!";
+                            notificationMessage = $"🚨 <b>Сьогодні останній день!</b>\nСьогодні вам потрібно повернути книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b> до бібліотеки.\nВи вже використали своє право на подовження, тому чекаємо на вас!";
                         }
                     }
                     else if (daysLeft < 0 && Math.Abs(daysLeft) % 7 == 0)
                     {
-                        notificationMessage = $"🆘 **ПРОТЕРМІНУВАННЯ!**\nВи мали повернути книгу **{bookTitle}** ще {Math.Abs(daysLeft)} днів тому!\nБудь ласка, терміново поверніть її до бібліотеки.";
+                        notificationMessage = $"🆘 <b>ПРОТЕРМІНУВАННЯ!</b>\nВи мали повернути книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b> ще {Math.Abs(daysLeft)} днів тому!\nБудь ласка, терміново поверніть її до бібліотеки.";
                     }
 
                     if (notificationMessage != null)
@@ -74,7 +74,7 @@ namespace LibraryBot.Services
                         try
                         {
                             // Відправляємо повідомлення (кнопка keyboard буде null для всіх днів, крім 0)
-                            await botClient.SendMessage(chatId, notificationMessage, parseMode: ParseMode.Markdown, replyMarkup: keyboard, cancellationToken: cancellationToken);
+                            await botClient.SendMessage(chatId, notificationMessage, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: cancellationToken);
                         }
                         catch (Exception ex)
                         {
