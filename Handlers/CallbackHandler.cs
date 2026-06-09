@@ -36,12 +36,12 @@ namespace LibraryBot.Handlers
             }
             else if (callbackQuery.Data.StartsWith("act_b_"))
             {
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(6));
+                int bookId = int.Parse(callbackQuery.Data.Substring(6));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    var row = books[rowIndex - 2];
                     int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE
                         ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
                         : 0;
@@ -55,7 +55,7 @@ namespace LibraryBot.Handlers
 
                     string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
-                    SessionManager.BorrowSessions[chatId] = new UserBorrowingSession { BookTitle = title, CatalogRowIndex = rowIndex };
+                    SessionManager.BorrowSessions[chatId] = new UserBorrowingSession { BookTitle = title, CatalogRowIndex = bookId };
                     SessionManager.UserStates[chatId] = UserState.WaitingForBorrowRealName;
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -64,22 +64,23 @@ namespace LibraryBot.Handlers
             }
             else if (callbackQuery.Data.StartsWith("act_r_"))
             {
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(6));
+                int bookId = int.Parse(callbackQuery.Data.Substring(6));
                 string tgName = callbackQuery.Message!.Chat.FirstName ?? "Без імені";
                 if (!string.IsNullOrEmpty(callbackQuery.Message.Chat.Username))
                     tgName += $" (@{callbackQuery.Message.Chat.Username})";
 
                 var userBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(tgName);
-                if (!userBooks.Any(b => b.CatalogRowIndex == rowIndex))
+                if (!userBooks.Any(b => b.BookId == bookId))
                 {
                     try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Ви не можете повернути цю книгу, бо вона записана не на вас.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     return;
                 }
 
                 var books = await GoogleSheetsService.GetBooksAsync();
-                if (books != null && books.Count >= rowIndex - 1)
+                var row = FindBookById(books, bookId);
+                if (row != null)
                 {
-                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     var request = new PendingRequest
                     {
@@ -87,7 +88,7 @@ namespace LibraryBot.Handlers
                         UserId = chatId,
                         UserName = tgName,
                         BookTitle = title,
-                        CatalogRowIndex = rowIndex
+                        CatalogRowIndex = bookId
                     };
 
                     await GoogleSheetsService.AddPendingRequestAsync(request);
@@ -214,7 +215,7 @@ namespace LibraryBot.Handlers
 
                 string exchangeStatus = canExchange ? "Так" : "Ні";
 
-                await GoogleSheetsService.AddBookToCatalogAsync(request.NewBookTitle, request.NewBookAuthor, request.NewBookGenre, "Доступна", exchangeStatus, 1);
+                await GoogleSheetsService.AddBookToCatalogAsync(request.NewBookTitle, request.NewBookAuthor, request.NewBookGenre, exchangeStatus, 1);
                 using (await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken))
                 {
                     await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(request.CatalogRowIndex, request.BookTitle);
@@ -234,12 +235,12 @@ namespace LibraryBot.Handlers
             }
             else if (callbackQuery.Data.StartsWith("userex_sel_"))
             {
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(11));
+                int bookId = int.Parse(callbackQuery.Data.Substring(11));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    var row = books[rowIndex - 2];
                     int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE
                         ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
                         : 0;
@@ -257,7 +258,7 @@ namespace LibraryBot.Handlers
                         return;
                     }
                     session.LibraryBookTitle = libBookTitle;
-                    session.LibraryBookRowIndex = rowIndex;
+                    session.LibraryBookRowIndex = bookId;
 
                     string telegramName = callbackQuery.Message!.Chat.FirstName ?? "Без імені";
                     if (!string.IsNullOrEmpty(callbackQuery.Message.Chat.Username)) telegramName += $" (@{callbackQuery.Message.Chat.Username})";
@@ -268,7 +269,7 @@ namespace LibraryBot.Handlers
                         UserId = chatId,
                         UserName = telegramName,
                         BookTitle = libBookTitle,
-                        CatalogRowIndex = rowIndex,
+                        CatalogRowIndex = bookId,
                         NewBookTitle = session.Title,
                         NewBookAuthor = session.Author,
                         NewBookGenre = session.Genre
@@ -316,15 +317,16 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(8));
+                int bookId = int.Parse(callbackQuery.Data.Substring(8));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "Невідома книга";
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "Невідома книга";
                     var confirmKeyboard = new InlineKeyboardMarkup(new[]
                     {
-                        new InlineKeyboardButton[] { InlineKeyboardButton.WithCallbackData("✅ Так, видалити", $"conf_del_{rowIndex}"), InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"canc_del_{rowIndex}") }
+                        new InlineKeyboardButton[] { InlineKeyboardButton.WithCallbackData("✅ Так, видалити", $"conf_del_{bookId}"), InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"canc_del_{bookId}") }
                     });
                     await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⚠️ Ви дійсно хочете безповоротно видалити книгу <b>{TextUtils.EscapeHtml(title)}</b> з каталогу?", parseMode: ParseMode.Html, replyMarkup: confirmKeyboard, cancellationToken: cancellationToken);
                 }
@@ -333,13 +335,14 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(9));
+                int bookId = int.Parse(callbackQuery.Data.Substring(9));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
-                    bool deleted = await GoogleSheetsService.DeleteBookFromCatalogAsync(title);
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    bool deleted = await GoogleSheetsService.DeleteBookByIdAsync(bookId);
                     if (deleted)
                         await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{TextUtils.EscapeHtml(title)}</b> успішно видалено з каталогу.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     else
@@ -355,12 +358,12 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(9));
+                int bookId = int.Parse(callbackQuery.Data.Substring(9));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    var row = books[rowIndex - 2];
                     string oldTitle = row.Count > GoogleSheetsService.COL_CATALOG_TITLE ? row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "" : "";
                     string oldAuthor = row.Count > GoogleSheetsService.COL_CATALOG_AUTHOR ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
                     string oldGenre = row.Count > GoogleSheetsService.COL_CATALOG_GENRE ? row[GoogleSheetsService.COL_CATALOG_GENRE]?.ToString() ?? "" : "";
@@ -371,7 +374,7 @@ namespace LibraryBot.Handlers
 
                     SessionManager.AdminBookSessions[chatId] = new AdminBookSession
                     {
-                        EditRowIndex = rowIndex,
+                        EditRowIndex = bookId,
                         Title = oldTitle,
                         Author = oldAuthor,
                         Genre = oldGenre,
@@ -389,12 +392,12 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(9));
+                int bookId = int.Parse(callbackQuery.Data.Substring(9));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    var row = books[rowIndex - 2];
                     int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
                     if (disponible <= 0)
                     {
@@ -405,7 +408,7 @@ namespace LibraryBot.Handlers
 
                     string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
-                    SessionManager.AdminExchangeSessions[chatId] = new AdminExchangeSession { OldBookRowIndex = rowIndex, OldBookTitle = title };
+                    SessionManager.AdminExchangeSessions[chatId] = new AdminExchangeSession { OldBookRowIndex = bookId, OldBookTitle = title };
                     SessionManager.UserStates[chatId] = UserState.WaitingForExchangeReaderName;
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -492,12 +495,12 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(10));
+                int bookId = int.Parse(callbackQuery.Data.Substring(10));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    var row = books[rowIndex - 2];
                     string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
                     int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
 
@@ -508,7 +511,7 @@ namespace LibraryBot.Handlers
                         return;
                     }
 
-                    SessionManager.AdminSessions[chatId] = new ManualBorrowingSession { BookId = title, CatalogRowIndex = rowIndex };
+                    SessionManager.AdminSessions[chatId] = new ManualBorrowingSession { BookId = title, CatalogRowIndex = bookId };
                     SessionManager.UserStates[chatId] = UserState.WaitingForManualReaderName;
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -519,16 +522,17 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                int rowIndex = int.Parse(callbackQuery.Data.Substring(10));
+                int bookId = int.Parse(callbackQuery.Data.Substring(10));
                 var books = await GoogleSheetsService.GetBooksAsync();
+                var row = FindBookById(books, bookId);
 
-                if (books != null && books.Count >= rowIndex - 1)
+                if (row != null)
                 {
-                    string title = books[rowIndex - 2][GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
-                    using (await AsyncKeyedLock.LockAsync($"book:{rowIndex}", cancellationToken))
+                    using (await AsyncKeyedLock.LockAsync($"book:{bookId}", cancellationToken))
                     {
-                        await GoogleSheetsService.ChangeAvailableCountAsync(rowIndex, 1);
+                        await GoogleSheetsService.ChangeAvailableCountAsync(bookId, 1);
                         await GoogleSheetsService.LogReturnDateAsync(title);
                     }
 
@@ -587,5 +591,14 @@ namespace LibraryBot.Handlers
             catch (Exception ex) { Console.WriteLine($"[Telegram API] Помилка AnswerCallbackQuery: {ex.Message}"); }
         }
 
+        /// <summary>
+        /// Знаходить рядок книги за стабільним Id (DbBook.Id), а не за позицією в каталозі.
+        /// Так дія завжди потрапляє в потрібну книгу, навіть якщо каталог змінився між
+        /// показом і натисканням (книгу видалили/обміняли).
+        /// </summary>
+        private static IList<object>? FindBookById(IList<IList<object>>? books, int bookId)
+            => books?.FirstOrDefault(b =>
+                b.Count > GoogleSheetsService.COL_CATALOG_ID
+                && System.Convert.ToInt32(b[GoogleSheetsService.COL_CATALOG_ID]) == bookId);
     }
 }

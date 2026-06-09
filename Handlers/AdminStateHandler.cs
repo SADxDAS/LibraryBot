@@ -1,6 +1,7 @@
 ﻿using LibraryBot.Models;
 using LibraryBot.Services;
 using LibraryBot.UI;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Telegram.Bot;
@@ -53,8 +54,9 @@ namespace LibraryBot.Handlers
                                     (System.Math.Abs(normalizedNew.Length - normalizedExisting.Length) <= 5 && ComputeLevenshteinDistance(normalizedNew, normalizedExisting) <= 3))
                                 {
                                     similarBooks.Add(existingTitle);
-                                    // Зберігаємо індекс найпершого знайденого збігу, щоб потім зробити йому +1
-                                    if (session.EditRowIndex == 0) session.EditRowIndex = i + 2;
+                                    // Зберігаємо стабільний Id найпершого збігу, щоб потім зробити йому +1
+                                    if (session.EditRowIndex == 0 && row.Count > GoogleSheetsService.COL_CATALOG_ID)
+                                        session.EditRowIndex = System.Convert.ToInt32(row[GoogleSheetsService.COL_CATALOG_ID]);
                                 }
                             }
                         }
@@ -104,9 +106,9 @@ namespace LibraryBot.Handlers
                 else if (text == "⬆️ Збільшити кількість на 1 у вже існуючої")
                 {
                     var session = SessionManager.AdminBookSessions[chatId];
-                    int rowIndex = session.EditRowIndex;
+                    int bookId = session.EditRowIndex;
 
-                    if (rowIndex == 0)
+                    if (bookId == 0)
                     {
                         await botClient.SendMessage(chatId, "❌ Помилка: не вдалося знайти оригінальну книгу.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                         SessionManager.ClearSession(chatId);
@@ -114,10 +116,9 @@ namespace LibraryBot.Handlers
                     }
 
                     var books = await GoogleSheetsService.GetBooksAsync();
-                    if (books != null && books.Count >= rowIndex - 1)
+                    var row = books?.FirstOrDefault(b => b.Count > GoogleSheetsService.COL_CATALOG_ID && System.Convert.ToInt32(b[GoogleSheetsService.COL_CATALOG_ID]) == bookId);
+                    if (row != null)
                     {
-                        var row = books[rowIndex - 2];
-
                         // Зчитуємо всі поточні дані з рядка
                         string t = row.Count > 0 ? row[0]?.ToString() ?? "" : "";
                         string a = row.Count > 1 ? row[1]?.ToString() ?? "" : "";
@@ -127,7 +128,7 @@ namespace LibraryBot.Handlers
                         int tot = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int dt) ? dt : 1 : 1;
 
                         // Перезаписуємо рядок, роблячи +1 до обох колонок (Доступно і Всього)
-                        bool updated = await GoogleSheetsService.UpdateBookInCatalogAsync(rowIndex, t, a, g, e, ava + 1, tot + 1);
+                        bool updated = await GoogleSheetsService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
 
                         if (updated)
                             await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
@@ -206,7 +207,7 @@ namespace LibraryBot.Handlers
                 int qty = session.Quantity > 0 ? session.Quantity : 1;
 
                 // Отримуємо результат: true якщо успішно, false якщо Google видав помилку
-                bool success = await GoogleSheetsService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, "Доступна", exchangeStatus, qty);
+                bool success = await GoogleSheetsService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, exchangeStatus, qty);
                 SessionManager.ClearSession(chatId);
 
                 if (success)
@@ -411,7 +412,7 @@ namespace LibraryBot.Handlers
                 }
 
                 // 3. Додаємо нову книгу (передаємо вибраний exchangeStatus замість захардкодженного "Так", кількість 1 шт)
-                await GoogleSheetsService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, "Доступна", exchangeStatus, 1);
+                await GoogleSheetsService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, exchangeStatus, 1);
 
                 SessionManager.ClearSession(chatId);
 

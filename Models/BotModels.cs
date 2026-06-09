@@ -3,13 +3,9 @@
     public enum UserState
     {
         None,
-        WaitingForManualBookId,
         WaitingForManualReaderName,
         WaitingForManualReaderContact,
         WaitingForPageNumber,
-        WaitingForBorrowBookTitle,
-        WaitingForBorrowContact,
-        WaitingForReturnBookTitle,
         WaitingForSearchQuery,
         WaitingForAddBookTitle,
         WaitingForAddBookAuthor,
@@ -92,8 +88,7 @@
         public string? Title { get; set; }
         public string? Author { get; set; }
         public string? Genre { get; set; }
-        public string? Status { get; set; } // "Доступна" або "Читають"
-        public string? ExchangeStatus { get; set; } // Нове поле: "Так" або "Ні"
+        public string? ExchangeStatus { get; set; } // "Так" або "Ні"
         public int Quantity { get; set; }
         public int CurrentAvailable { get; set; } // <--- ДОДАЙ ЦЕ
         public int CurrentTotal { get; set; }
@@ -106,7 +101,6 @@
         public string NewBookTitle { get; set; } = "";
         public string NewBookAuthor { get; set; } = "";
         public string NewBookGenre { get; set; } = "";
-        public string NewBookExchangeStatus { get; set; } = "Так";
     }
     public class UserExchangeSession
     {

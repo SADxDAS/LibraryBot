@@ -17,16 +17,7 @@ namespace LibraryBot.Services
         public const int COL_CATALOG_EXCHANGE = 3;
         public const int COL_CATALOG_AVAILABLE = 4;
         public const int COL_CATALOG_TOTAL = 5;
-
-        public const int COL_BORROW_TITLE = 0;
-        public const int COL_BORROW_REALNAME = 1;
-        public const int COL_BORROW_TGNAME = 2;
-        public const int COL_BORROW_CONTACT = 3;
-        public const int COL_BORROW_ISSUEDATE = 4;
-        public const int COL_BORROW_RETURNDATE = 5;
-        public const int COL_BORROW_CHATID = 6;
-        public const int COL_BORROW_DUEDATE = 7;
-        public const int COL_BORROW_EXTENDED = 8;
+        public const int COL_CATALOG_ID = 6; // стабільний первинний ключ DbBook.Id (для адресації книги в колбеках)
 
         public static void Initialize()
         {
@@ -42,8 +33,6 @@ namespace LibraryBot.Services
             }
         }
 
-        public static void ClearCache() { } // Більше не потрібно для локальної БД
-
         public static async Task<IList<IList<object>>?> GetBooksAsync()
         {
             using var db = new AppDbContext();
@@ -52,7 +41,7 @@ namespace LibraryBot.Services
             foreach (var b in books)
             {
                 result.Add(new List<object> {
-                    b.Title, b.Author, b.Genre, b.ExchangeStatus, b.AvailableCount, b.TotalCount
+                    b.Title, b.Author, b.Genre, b.ExchangeStatus, b.AvailableCount, b.TotalCount, b.Id
                 });
             }
             return result;
@@ -79,28 +68,24 @@ namespace LibraryBot.Services
         /// <summary>
         /// Атомарно зменшує кількість доступних примірників на 1, але ЛИШЕ якщо є що зменшувати.
         /// Повертає false, якщо книги немає або всі примірники вже на руках. Викликати слід
-        /// усередині критичної секції "book:{rowIndex}" (<see cref="AsyncKeyedLock"/>), щоб два
+        /// усередині критичної секції "book:{bookId}" (<see cref="AsyncKeyedLock"/>), щоб два
         /// користувачі не змогли одночасно забрати останній примірник.
+        /// Адресація за стабільним первинним ключем (Id), а не за позицією в каталозі.
         /// </summary>
-        public static async Task<bool> TryDecrementAvailableAsync(int rowIndex)
+        public static async Task<bool> TryDecrementAvailableAsync(int bookId)
         {
             using var db = new AppDbContext();
-            int index = rowIndex - 2;
-            if (index < 0) return false;
-            var book = await db.Books.OrderBy(b => b.Id).Skip(index).Take(1).FirstOrDefaultAsync();
+            var book = await db.Books.FindAsync(bookId);
             if (book == null || book.AvailableCount <= 0) return false;
             book.AvailableCount -= 1;
             await db.SaveChangesAsync();
             return true;
         }
 
-        public static async Task<bool> ChangeAvailableCountAsync(int rowIndex, int delta)
+        public static async Task<bool> ChangeAvailableCountAsync(int bookId, int delta)
         {
             using var db = new AppDbContext();
-            int index = rowIndex - 2;
-            if (index < 0) return false;
-            // Беремо лише потрібний рядок (OFFSET/LIMIT у SQL), а не весь каталог.
-            var book = await db.Books.OrderBy(b => b.Id).Skip(index).Take(1).FirstOrDefaultAsync();
+            var book = await db.Books.FindAsync(bookId);
             if (book != null)
             {
                 book.AvailableCount = Math.Max(0, book.AvailableCount + delta);
@@ -126,7 +111,7 @@ namespace LibraryBot.Services
             }
         }
 
-        public static async Task<List<(string Title, int CatalogRowIndex)>> GetUserBorrowedBooksAsync(string telegramName)
+        public static async Task<List<(string Title, int BookId)>> GetUserBorrowedBooksAsync(string telegramName)
         {
             using var db = new AppDbContext();
             var books = await db.Books.AsNoTracking().OrderBy(b => b.Id).ToListAsync();
@@ -134,19 +119,19 @@ namespace LibraryBot.Services
                 .Where(b => b.TelegramName.ToLower().Contains(telegramName.ToLower()) && b.ReturnDate == null)
                 .ToListAsync();
 
-            var result = new List<(string Title, int CatalogRowIndex)>();
+            var result = new List<(string Title, int BookId)>();
             foreach (var b in borrows)
             {
-                int index = books.FindIndex(book => book.Title.ToLower() == b.BookTitle.ToLower());
-                if (index != -1)
+                var book = books.FirstOrDefault(book => book.Title.ToLower() == b.BookTitle.ToLower());
+                if (book != null)
                 {
-                    result.Add((b.BookTitle, index + 2));
+                    result.Add((b.BookTitle, book.Id));
                 }
             }
             return result;
         }
 
-        public static async Task<bool> AddBookToCatalogAsync(string title, string author, string genre, string status, string exchangeStatus, int quantity = 1)
+        public static async Task<bool> AddBookToCatalogAsync(string title, string author, string genre, string exchangeStatus, int quantity = 1)
         {
             using var db = new AppDbContext();
             db.Books.Add(new DbBook
@@ -162,12 +147,10 @@ namespace LibraryBot.Services
             return true;
         }
 
-        public static async Task<bool> UpdateBookInCatalogAsync(int rowIndex, string title, string author, string genre, string exchangeStatus, int available, int total)
+        public static async Task<bool> UpdateBookInCatalogAsync(int bookId, string title, string author, string genre, string exchangeStatus, int available, int total)
         {
             using var db = new AppDbContext();
-            int index = rowIndex - 2;
-            if (index < 0) return false;
-            var book = await db.Books.OrderBy(b => b.Id).Skip(index).Take(1).FirstOrDefaultAsync();
+            var book = await db.Books.FindAsync(bookId);
             if (book != null)
             {
                 book.Title = title;
@@ -182,10 +165,10 @@ namespace LibraryBot.Services
             return false;
         }
 
-        public static async Task<bool> DeleteBookFromCatalogAsync(string title)
+        public static async Task<bool> DeleteBookByIdAsync(int bookId)
         {
             using var db = new AppDbContext();
-            var book = await db.Books.FirstOrDefaultAsync(b => b.Title.ToLower() == title.ToLower());
+            var book = await db.Books.FindAsync(bookId);
             if (book != null)
             {
                 db.Books.Remove(book);
@@ -247,12 +230,10 @@ namespace LibraryBot.Services
             return false;
         }
 
-        public static async Task<bool> ProcessExchangeOutgoingBookAsync(int rowIndex, string title)
+        public static async Task<bool> ProcessExchangeOutgoingBookAsync(int bookId, string title)
         {
             using var db = new AppDbContext();
-            int index = rowIndex - 2;
-            if (index < 0) return false;
-            var book = await db.Books.OrderBy(b => b.Id).Skip(index).Take(1).FirstOrDefaultAsync();
+            var book = await db.Books.FindAsync(bookId);
             if (book != null)
             {
                 if (book.TotalCount > 1)
@@ -329,26 +310,6 @@ namespace LibraryBot.Services
                 return true;
             }
             return false;
-        }
-
-        public static int ComputeLevenshteinDistance(string s, string t)
-        {
-            if (string.IsNullOrEmpty(s)) return string.IsNullOrEmpty(t) ? 0 : t.Length;
-            if (string.IsNullOrEmpty(t)) return s.Length;
-            int[] v0 = new int[t.Length + 1];
-            int[] v1 = new int[t.Length + 1];
-            for (int i = 0; i < v0.Length; i++) v0[i] = i;
-            for (int i = 0; i < s.Length; i++)
-            {
-                v1[0] = i + 1;
-                for (int j = 0; j < t.Length; j++)
-                {
-                    int cost = (s[i] == t[j]) ? 0 : 1;
-                    v1[j + 1] = Math.Min(Math.Min(v1[j] + 1, v0[j + 1] + 1), v0[j] + cost);
-                }
-                for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
-            }
-            return v1[t.Length];
         }
 
         public static async Task<(int CurrentlyReadingCount, int ReadCount, List<string> ReadBooks, List<string> CurrentBooks)> GetUserProfileAsync(long chatId)
