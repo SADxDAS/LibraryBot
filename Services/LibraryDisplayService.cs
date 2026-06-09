@@ -27,7 +27,9 @@ namespace LibraryBot.Services
 
             int pageSize = 10;
             var validBooks = books.Select((b, i) => new { RowData = b, ActualIndex = i + 2 })
-                                  .Where(b => b.RowData.Count > 0 && !string.IsNullOrWhiteSpace(b.RowData[0]?.ToString()))
+                                  .Where(b => b.RowData.Count > 0
+                                              && !string.IsNullOrWhiteSpace(b.RowData[0]?.ToString())
+                                              && CardTotal(b.RowData) > 0) // приховуємо списані книги (Total=0)
                                   .ToList();
 
             int totalPages = (int)Math.Ceiling((double)validBooks.Count / pageSize);
@@ -100,6 +102,7 @@ namespace LibraryBot.Services
             foreach (var row in books)
             {
                 if (row.Count == 0) continue;
+                if (CardTotal(row) <= 0) continue; // приховані (списані) книги — Total=0 — не показуємо в пошуку
 
                 string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
                 string author = row.Count > 1 ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";

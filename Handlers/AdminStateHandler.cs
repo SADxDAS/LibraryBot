@@ -67,7 +67,7 @@ namespace LibraryBot.Handlers
                 {
                     SessionManager.UserStates[chatId] = UserState.WaitingForAddBookDuplicateCheck;
 
-                    string warning = $"⚠️ <b>Знайдено схожі книги!</b>\nУ каталозі вже є книги з ідентичною або дуже схожою назвою:\n\n";
+                    string warning = $"⚠️ <b>Знайдено схожі книги!</b>\nУ каталозі вже є (або були раніше списані) книги зі схожою назвою:\n\n";
 
                     // Беремо унікальні та залишаємо перші 5
                     foreach (var b in System.Linq.Enumerable.Take(System.Linq.Enumerable.Distinct(similarBooks), 5))

@@ -111,6 +111,14 @@ namespace LibraryBot.Services
             }
         }
 
+        /// <summary>Скільки примірників книги зараз на руках у читачів (відкриті видачі за назвою).</summary>
+        public static async Task<int> CountActiveBorrowingsAsync(string bookTitle)
+        {
+            using var db = new AppDbContext();
+            return await db.Borrowings
+                .CountAsync(b => b.BookTitle.ToLower() == bookTitle.ToLower() && b.ReturnDate == null);
+        }
+
         public static async Task<List<(string Title, int BookId)>> GetUserBorrowedBooksAsync(string telegramName)
         {
             using var db = new AppDbContext();
@@ -165,13 +173,19 @@ namespace LibraryBot.Services
             return false;
         }
 
+        /// <summary>
+        /// «Видаляє» книгу з каталогу М'ЯКО: рядок лишається, але кількість стає 0,
+        /// тож книга зникає з каталогу й пошуку (фільтр TotalCount > 0). Історію та
+        /// можливість відновити (повторним додаванням → "збільшити кількість") збережено.
+        /// </summary>
         public static async Task<bool> DeleteBookByIdAsync(int bookId)
         {
             using var db = new AppDbContext();
             var book = await db.Books.FindAsync(bookId);
             if (book != null)
             {
-                db.Books.Remove(book);
+                book.TotalCount = 0;
+                book.AvailableCount = 0;
                 await db.SaveChangesAsync();
                 return true;
             }
@@ -236,17 +250,11 @@ namespace LibraryBot.Services
             var book = await db.Books.FindAsync(bookId);
             if (book != null)
             {
-                if (book.TotalCount > 1)
-                {
-                    book.AvailableCount = Math.Max(0, book.AvailableCount - 1);
-                    book.TotalCount -= 1;
-                    await db.SaveChangesAsync();
-                }
-                else
-                {
-                    db.Books.Remove(book);
-                    await db.SaveChangesAsync();
-                }
+                // Списуємо один примірник. Останній → Total стає 0, і книга м'яко ховається
+                // (рядок лишається, але зникає з каталогу/пошуку через фільтр TotalCount > 0).
+                book.AvailableCount = Math.Max(0, book.AvailableCount - 1);
+                book.TotalCount = Math.Max(0, book.TotalCount - 1);
+                await db.SaveChangesAsync();
                 return true;
             }
             return false;

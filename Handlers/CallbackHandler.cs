@@ -342,6 +342,15 @@ namespace LibraryBot.Handlers
                 if (row != null)
                 {
                     string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+
+                    // Не даємо списати книгу, якщо її примірники ще на руках у читачів.
+                    int onLoan = await GoogleSheetsService.CountActiveBorrowingsAsync(title);
+                    if (onLoan > 0)
+                    {
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"🚫 Не можна списати книгу <b>{TextUtils.EscapeHtml(title)}</b>: {onLoan} прим. зараз на руках у читачів.\nСпочатку дочекайтеся повернення всіх примірників.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        return;
+                    }
+
                     bool deleted = await GoogleSheetsService.DeleteBookByIdAsync(bookId);
                     if (deleted)
                         await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{TextUtils.EscapeHtml(title)}</b> успішно видалено з каталогу.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
