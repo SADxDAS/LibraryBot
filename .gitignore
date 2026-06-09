@@ -1,8 +1,44 @@
-# Скрываем ключи и пароли
+# ── Секрети та ключі (НІКОЛИ не комітити) ──────────────────────────
 .env
+.env.*
+!.env.example
 credentials.json
+*.pem
+*.key
 
-# Игнорируем системные папки Visual Studio (чтобы проект не весил гигабайты)
+# ── Збірка .NET ────────────────────────────────────────────────────
 bin/
 obj/
+out/
+publish/
+*.dll
+*.pdb
+
+# ── Visual Studio / Rider / VS Code (локальні налаштування) ────────
 .vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+Properties/PublishProfiles/*.pubxml.user
+
+# ── Інструментарій Ruflo / Claude-Flow (локальний стан, не для прода) ─
+.claude/
+.claude-flow/
+.swarm/
+.mcp.json
+.roo/
+.roomodes
+
+# ── Локальні бази даних / стан (прод працює на Railway PostgreSQL) ──
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+ruvector.db
+
+# ── Інше ───────────────────────────────────────────────────────────
+*.log
+.DS_Store
+Thumbs.db

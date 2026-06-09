@@ -59,20 +59,51 @@ namespace LibraryBot.Handlers
                 }
             }
 
-            // Серіалізуємо обробку в межах ОДНОГО користувача: його повідомлення/натискання
-            // оброблюються по черзі, тож швидкі подвійні натискання не псують його стан сесії.
-            // РІЗНІ користувачі мають різні ключі → працюють паралельно, у різних потоках.
-            if (userId is long uid)
+            // КОАЛЕСИНГ (single-flight): якщо такий самий запит від цього користувача вже
+            // обробляється (або щойно оброблений), цей — дублікат, відкидаємо. Багато
+            // однакових запитів за секунду → лише ОДНА відповідь.
+            string? dedupKey = BuildDedupKey(update, userId);
+            if (dedupKey != null && !RequestCoalescer.TryEnter(dedupKey))
+                return;
+
+            try
             {
-                using (await AsyncKeyedLock.LockAsync($"user:{uid}", cancellationToken))
+                // Серіалізуємо обробку в межах ОДНОГО користувача: його повідомлення/натискання
+                // оброблюються по черзі, тож швидкі подвійні натискання не псують його стан сесії.
+                // РІЗНІ користувачі мають різні ключі → працюють паралельно, у різних потоках.
+                if (userId is long uid)
+                {
+                    using (await AsyncKeyedLock.LockAsync($"user:{uid}", cancellationToken))
+                    {
+                        await RouteUpdateAsync(botClient, update, cancellationToken);
+                    }
+                }
+                else
                 {
                     await RouteUpdateAsync(botClient, update, cancellationToken);
                 }
             }
-            else
+            finally
             {
-                await RouteUpdateAsync(botClient, update, cancellationToken);
+                if (dedupKey != null) RequestCoalescer.Exit(dedupKey);
             }
+        }
+
+        /// <summary>
+        /// Ключ для коалесингу = користувач + зміст запиту. Однакові натискання/повідомлення
+        /// дають однаковий ключ і колапсують в одну обробку. null — коалесинг не застосовуємо.
+        /// </summary>
+        private static string? BuildDedupKey(Update update, long? userId)
+        {
+            if (userId is not long uid) return null;
+
+            if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } data)
+                return $"cb:{uid}:{data}";
+
+            if (update.Message?.Text is { } txt && !string.IsNullOrWhiteSpace(txt))
+                return $"msg:{uid}:{txt.Trim()}";
+
+            return null;
         }
 
         private static async Task RouteUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
