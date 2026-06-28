@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace LibraryBot.Data
 {
@@ -14,6 +16,10 @@ namespace LibraryBot.Data
         public string ExchangeStatus { get; set; } = "Так";
         public int AvailableCount { get; set; }
         public int TotalCount { get; set; }
+
+        // Навігаційні властивості для зв'язків (зворотний бік зв'язку)
+        public virtual ICollection<DbBorrowing> Borrowings { get; set; } = new List<DbBorrowing>();
+        public virtual ICollection<DbPendingRequest> PendingRequests { get; set; } = new List<DbPendingRequest>();
     }
 
     // Таблиця "Видачі"
@@ -21,7 +27,13 @@ namespace LibraryBot.Data
     {
         [Key]
         public int Id { get; set; }
-        public string BookTitle { get; set; } = string.Empty;
+
+        // Внешний ключ вместо строки BookTitle
+        public int BookId { get; set; }
+
+        [ForeignKey(nameof(BookId))]
+        public virtual DbBook Book { get; set; } = null!;
+
         public string RealName { get; set; } = string.Empty;
         public string TelegramName { get; set; } = string.Empty;
         public string Contact { get; set; } = string.Empty;
@@ -42,9 +54,18 @@ namespace LibraryBot.Data
         public string UserName { get; set; } = string.Empty;
         public string RealName { get; set; } = string.Empty;
         public string Contact { get; set; } = string.Empty;
-        public string BookTitle { get; set; } = string.Empty;
+
+        // Внешний ключ может быть Nullable, так как тип запроса "UserExchange" 
+        // может предлагать абсолютно новую книгу, которой еще нет в каталоге
+        public int? BookId { get; set; }
+
+        [ForeignKey(nameof(BookId))]
+        public virtual DbBook? Book { get; set; }
+
         public int CatalogRowIndex { get; set; }
         public int BorrowDays { get; set; }
+
+        // Поля для книг, предлагаемых пользователями на обмен (остаются строками)
         public string NewBookTitle { get; set; } = "-";
         public string NewBookAuthor { get; set; } = "-";
         public string NewBookGenre { get; set; } = "-";
@@ -55,6 +76,10 @@ namespace LibraryBot.Data
     {
         [Key]
         public int Id { get; set; }
+
+        // В логах обмена текстовые названия лучше оставить как исторический снимок (Snapshot).
+        // Если через год книга будет полностью удалена из каталога, запись в логах 
+        // всё равно сохранит информацию о том, какое именно название фигурировало в обмене.
         public string OldBookTitle { get; set; } = string.Empty;
         public string NewBookTitle { get; set; } = string.Empty;
         public string TelegramName { get; set; } = string.Empty;

@@ -13,18 +13,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace LibraryBot.Services
 {
-    /// <summary>
-    /// Одноразова міграція даних зі старих Google Sheets у PostgreSQL.
-    ///
-    /// Запуск:  dotnet run -- migrate
-    ///
-    /// Стратегія: спершу повністю вичитуємо ВСІ дані з таблиці в пам'ять
-    /// (щоб збій читання ніколи не зачепив БД), потім очищаємо таблиці
-    /// Books/Borrowings/ExchangeLogs і заливаємо заново. Повторний запуск безпечний.
-    /// </summary>
     public static class SheetsMigrationService
     {
-        // Той самий scope, що працював у старому GoogleSheetsService.
         private static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
 
         private static readonly string[] DateFormats =
@@ -69,14 +59,15 @@ namespace LibraryBot.Services
                 return;
             }
 
-            // 1) Читаємо все в пам'ять (БД ще не чіпаємо).
             List<DbBook> books;
             List<DbBorrowing> borrowings;
             List<DbExchangeLog> exchanges;
             try
             {
+                // Зчитуємо книги
                 books = await ReadBooksAsync(service, spreadsheetId);
-                borrowings = await ReadBorrowingsAsync(service, spreadsheetId);
+                // Передаємо список книг у видачі, щоб зв'язати їх об'єктами
+                borrowings = await ReadBorrowingsAsync(service, spreadsheetId, books);
                 exchanges = await ReadExchangesAsync(service, spreadsheetId);
             }
             catch (Exception ex)
@@ -93,8 +84,6 @@ namespace LibraryBot.Services
                 return;
             }
 
-            // 2) Очищаємо й заливаємо. Транзакція + стратегія повторів = атомарність
-            //    і стійкість до транзієнтних розривів з'єднання Railway.
             try
             {
                 using var db = new AppDbContext();
@@ -108,7 +97,10 @@ namespace LibraryBot.Services
                     await db.ExchangeLogs.ExecuteDeleteAsync();
                     await db.Books.ExecuteDeleteAsync();
 
+                    // Додаємо книги. Вони отримають свої ID після збереження.
                     await db.Books.AddRangeAsync(books);
+
+                    // Додаємо видачі. Entity Framework сам витягне ID з книг і проставить їх у BookId
                     await db.Borrowings.AddRangeAsync(borrowings);
                     await db.ExchangeLogs.AddRangeAsync(exchanges);
                     await db.SaveChangesAsync();
@@ -126,8 +118,6 @@ namespace LibraryBot.Services
             }
         }
 
-        // ── Читання вкладок ──────────────────────────────────────────────
-
         private static async Task<List<DbBook>> ReadBooksAsync(SheetsService service, string spreadsheetId)
         {
             var rows = await GetRowsAsync(service, spreadsheetId, "Каталог!A2:F");
@@ -135,7 +125,7 @@ namespace LibraryBot.Services
             foreach (var row in rows)
             {
                 string title = Cell(row, 0);
-                if (string.IsNullOrWhiteSpace(title)) continue; // пропускаємо порожні рядки
+                if (string.IsNullOrWhiteSpace(title)) continue;
 
                 string exchange = Cell(row, 3);
                 list.Add(new DbBook
@@ -151,7 +141,7 @@ namespace LibraryBot.Services
             return list;
         }
 
-        private static async Task<List<DbBorrowing>> ReadBorrowingsAsync(SheetsService service, string spreadsheetId)
+        private static async Task<List<DbBorrowing>> ReadBorrowingsAsync(SheetsService service, string spreadsheetId, List<DbBook> loadedBooks)
         {
             var rows = await GetRowsAsync(service, spreadsheetId, "Видачі!A2:I");
             var list = new List<DbBorrowing>();
@@ -160,17 +150,23 @@ namespace LibraryBot.Services
                 string title = Cell(row, 0);
                 if (string.IsNullOrWhiteSpace(title)) continue;
 
+                // ЗНАХОДИМО КНИГУ: Зв'язуємо видачу з об'єктом книги, який ми щойно завантажили з каталогу
+                var book = loadedBooks.FirstOrDefault(b => b.Title.ToLower() == title.ToLower());
+
+                // Якщо в старих таблицях є видача книги, якої вже немає в каталозі, ми її пропускаємо
+                if (book == null) continue;
+
                 DateTime issue = ParseDate(Cell(row, 4)) ?? DateTime.Now;
                 DateTime due = ParseDate(Cell(row, 7)) ?? issue;
 
                 list.Add(new DbBorrowing
                 {
-                    BookTitle = title,
+                    Book = book, // EF Core сам призначить правильний BookId після SaveChanges()
                     RealName = Cell(row, 1),
                     TelegramName = Cell(row, 2),
                     Contact = Cell(row, 3),
                     IssueDate = issue,
-                    ReturnDate = ParseDate(Cell(row, 5)), // порожньо → null (книга ще на руках)
+                    ReturnDate = ParseDate(Cell(row, 5)),
                     ChatId = ParseLong(Cell(row, 6), 0),
                     DueDate = due,
                     IsExtended = Cell(row, 8).Equals("Так", StringComparison.OrdinalIgnoreCase)
@@ -181,17 +177,9 @@ namespace LibraryBot.Services
 
         private static async Task<List<DbExchangeLog>> ReadExchangesAsync(SheetsService service, string spreadsheetId)
         {
-            // Вкладки "Обмін" може не бути — тоді просто повертаємо порожній список.
             List<IList<object>> rows;
-            try
-            {
-                rows = await GetRowsAsync(service, spreadsheetId, "Обмін!A2:D");
-            }
-            catch
-            {
-                Console.WriteLine("ℹ️ Вкладку \"Обмін\" не знайдено — пропускаємо.");
-                return new List<DbExchangeLog>();
-            }
+            try { rows = await GetRowsAsync(service, spreadsheetId, "Обмін!A2:D"); }
+            catch { return new List<DbExchangeLog>(); }
 
             var list = new List<DbExchangeLog>();
             foreach (var row in rows)
@@ -211,32 +199,19 @@ namespace LibraryBot.Services
             return list;
         }
 
-        // ── Допоміжне ────────────────────────────────────────────────────
-
         private static async Task<List<IList<object>>> GetRowsAsync(SheetsService service, string spreadsheetId, string range)
         {
             var response = await service.Spreadsheets.Values.Get(spreadsheetId, range).ExecuteAsync();
             return (response.Values ?? new List<IList<object>>()).ToList();
         }
 
-        private static string Cell(IList<object> row, int index)
-            => index < row.Count ? row[index]?.ToString()?.Trim() ?? "" : "";
+        private static string Cell(IList<object> row, int index) => index < row.Count ? row[index]?.ToString()?.Trim() ?? "" : "";
+        private static int ParseInt(string s, int fallback) => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : fallback;
+        private static long ParseLong(string s, long fallback) => long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long v) ? v : fallback;
 
-        private static int ParseInt(string s, int fallback)
-            => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : fallback;
-
-        private static long ParseLong(string s, long fallback)
-            => long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long v) ? v : fallback;
-
-        /// <summary>
-        /// Парсить дату з таблиці й позначає її як UTC — щоб зберегти "настінний" час
-        /// дослівно, незалежно від часового поясу машини, на якій запускають міграцію
-        /// (timestamptz приймає Kind=Utc без конвертації). Порожнє значення → null.
-        /// </summary>
         private static DateTime? ParseDate(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return null;
-
             if (DateTime.TryParseExact(s, DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dt)
                 || DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
             {
