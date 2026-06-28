@@ -29,7 +29,7 @@ Create a `.env` file locally (loaded by DotNetEnv at startup):
 ```
 TELEGRAM_BOT_TOKEN=...
 ADMIN_IDS=123456789,987654321   # comma-separated Telegram chat IDs
-SPREADSHEET_ID=...              # legacy check — still required by startup validation even though Google Sheets is no longer used (also used by the `migrate` mode)
+SPREADSHEET_ID=...              # only needed for the one-shot `migrate` mode (NOT required to run the bot)
 
 # PostgreSQL — pick ONE form (see connection resolution below):
 DATABASE_PUBLIC_URL=postgresql://postgres:PASS@HOST.proxy.rlwy.net:PORT/railway   # preferred; copy from Railway dashboard
@@ -42,7 +42,7 @@ PGPASSWORD=...
 # PG_SSL_MODE=Require   # optional override: Disable | Prefer | Require (default Require)
 ```
 
-`GOOGLE_CREDENTIALS_JSON` (env var) or a `credentials.json` file must also be present — another legacy startup check. On Railway, set the env var; locally, keep the file.
+`GOOGLE_CREDENTIALS_JSON` / `credentials.json` are **only** needed for the one-shot `migrate` mode — the running bot no longer touches Google. `Program.cs` startup only validates `TELEGRAM_BOT_TOKEN` and DB connectivity.
 
 **PostgreSQL connection resolution** (`Data/AppDbContext.BuildConnectionString`), in priority order:
 1. `DATABASE_PUBLIC_URL` / `DATABASE_URL` (a `postgresql://user:pass@host:port/db` URL — parsed via `TryBuildFromUrl`).

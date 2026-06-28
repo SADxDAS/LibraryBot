@@ -151,13 +151,7 @@ namespace LibraryBot.Handlers
             // бот автоматично вважає це запитом на пошук книги.
             if (!string.IsNullOrEmpty(messageText))
             {
-                string telegramName = message.Chat.FirstName ?? "Без імені";
-                if (!string.IsNullOrEmpty(message.Chat.Username))
-                {
-                    telegramName += $" (@{message.Chat.Username})";
-                }
-
-                await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, telegramName, cancellationToken);
+                await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, cancellationToken);
             }
         }
         public static Task HandleErrorAsync(ITelegramBotClient botClient, System.Exception exception, CancellationToken cancellationToken)

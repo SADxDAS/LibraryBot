@@ -69,7 +69,7 @@ namespace LibraryBot.Handlers
                 if (!string.IsNullOrEmpty(callbackQuery.Message.Chat.Username))
                     tgName += $" (@{callbackQuery.Message.Chat.Username})";
 
-                var userBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(tgName);
+                var userBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(chatId);
                 if (!userBooks.Any(b => b.BookId == bookId))
                 {
                     try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Ви не можете повернути цю книгу, бо вона записана не на вас.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }

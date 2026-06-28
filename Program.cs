@@ -1,5 +1,4 @@
 ﻿using System;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Telegram.Bot;
@@ -70,40 +69,19 @@ namespace LibraryBot
                 return; // М'яко виходимо з програми
             }
 
-            // 3. ПЕРЕВІРКА ТА СТВОРЕННЯ КЛЮЧІВ GOOGLE
-            string? googleCreds = Environment.GetEnvironmentVariable("GOOGLE_CREDENTIALS_JSON");
-            if (!string.IsNullOrWhiteSpace(googleCreds))
-            {
-                // Якщо є змінна Railway - створюємо файл
-                File.WriteAllText("credentials.json", googleCreds);
-            }
-            else if (!File.Exists("credentials.json"))
-            {
-                // Якщо і змінної немає, і файлу локально немає
-                Console.WriteLine("❌ КРИТИЧНА ПОМИЛКА: Немає файлу 'credentials.json' і змінна GOOGLE_CREDENTIALS_JSON порожня.");
-                Console.WriteLine("Бот безпечно зупинено. Додайте ключ доступу Google.");
-                return;
-            }
-
-            // 4. ПЕРЕВІРКА ID ТАБЛИЦІ
-            string? spreadsheetId = Environment.GetEnvironmentVariable("SPREADSHEET_ID");
-            if (string.IsNullOrWhiteSpace(spreadsheetId))
-            {
-                Console.WriteLine("❌ КРИТИЧНА ПОМИЛКА: Змінна SPREADSHEET_ID порожня або відсутня.");
-                return;
-            }
-
-            // Якщо всі перевірки пройдені — вантажимо адмінів
+            // Вантажимо адмінів зі змінної ADMIN_IDS
             SessionManager.LoadAdminsFromEnv();
 
-            // 5. БЕЗПЕЧНЕ ПІДКЛЮЧЕННЯ ДО GOOGLE SHEETS
+            // 3. ПЕРЕВІРКА З'ЄДНАННЯ З БД.
+            //    Google у рантаймі більше не потрібен — credentials.json / SPREADSHEET_ID
+            //    потрібні лише одноразовій команді `migrate` (вона перевіряє їх сама).
             try
             {
                 GoogleSheetsService.Initialize();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ ПОМИЛКА ПІДКЛЮЧЕННЯ ДО GOOGLE ТАБЛИЦЬ: {ex.Message}");
+                Console.WriteLine($"❌ ПОМИЛКА ПІДКЛЮЧЕННЯ ДО БД: {ex.Message}");
                 return;
             }
 

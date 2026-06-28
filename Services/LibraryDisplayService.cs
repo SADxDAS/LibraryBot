@@ -123,7 +123,7 @@ namespace LibraryBot.Services
                 .ToList();
         }
 
-        public static async Task SearchBooksAsync(ITelegramBotClient botClient, long chatId, string query, string telegramName, CancellationToken cancellationToken)
+        public static async Task SearchBooksAsync(ITelegramBotClient botClient, long chatId, string query, CancellationToken cancellationToken)
         {
             var books = await GoogleSheetsService.GetBooksAsync();
             SessionManager.ClearSession(chatId);
@@ -144,7 +144,7 @@ namespace LibraryBot.Services
             }
 
             await botClient.SendMessage(chatId, $"🔍 Знайдено книг: {foundBooks.Count}. Ось результати:", cancellationToken: cancellationToken);
-            var userBorrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(telegramName);
+            var userBorrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(chatId);
             var userBorrowedRowIndexes = userBorrowedBooks.Select(b => b.BookId).ToHashSet();
 
             foreach (var item in foundBooks.Take(5))
@@ -200,9 +200,9 @@ namespace LibraryBot.Services
             }
         }
 
-        public static async Task ShowUserBorrowedBooksAsync(ITelegramBotClient botClient, long chatId, string telegramName, CancellationToken cancellationToken)
+        public static async Task ShowUserBorrowedBooksAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
         {
-            var borrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(telegramName);
+            var borrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(chatId);
 
             if (borrowedBooks == null || borrowedBooks.Count == 0)
             {

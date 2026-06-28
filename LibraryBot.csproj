@@ -5,6 +5,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Тестовий проєкт лежить у підпапці — виключаємо його файли зі збірки основного проєкту
+         (інакше їх підхопить дефолтний glob **/*.cs і зламає і локальну, і Docker-збірку). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);LibraryBot.Tests/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

@@ -26,13 +26,7 @@ namespace LibraryBot.Handlers
                     return true;
                 }
 
-                string telegramName = message.Chat.FirstName ?? "Без імені";
-                if (!string.IsNullOrEmpty(message.Chat.Username))
-                {
-                    telegramName += $" (@{message.Chat.Username})";
-                }
-
-                await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, telegramName, cancellationToken);
+                await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, cancellationToken);
                 return true;
             }
 

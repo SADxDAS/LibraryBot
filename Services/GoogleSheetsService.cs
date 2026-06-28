@@ -119,12 +119,13 @@ namespace LibraryBot.Services
                 .CountAsync(b => b.BookTitle.ToLower() == bookTitle.ToLower() && b.ReturnDate == null);
         }
 
-        public static async Task<List<(string Title, int BookId)>> GetUserBorrowedBooksAsync(string telegramName)
+        // Матчимо за ChatId (а не за іменем) — імена можуть збігатися/бути підрядком одне одного.
+        public static async Task<List<(string Title, int BookId)>> GetUserBorrowedBooksAsync(long chatId)
         {
             using var db = new AppDbContext();
             var books = await db.Books.AsNoTracking().OrderBy(b => b.Id).ToListAsync();
             var borrows = await db.Borrowings.AsNoTracking()
-                .Where(b => b.TelegramName.ToLower().Contains(telegramName.ToLower()) && b.ReturnDate == null)
+                .Where(b => b.ChatId == chatId && b.ReturnDate == null)
                 .ToListAsync();
 
             var result = new List<(string Title, int BookId)>();

@@ -116,9 +116,7 @@ namespace LibraryBot.Commands
         {
             long chatId = message.Chat.Id;
             SessionManager.ClearSession(chatId);
-            string tgName = message.Chat.FirstName ?? "Без імені";
-            if (!string.IsNullOrEmpty(message.Chat.Username)) tgName += $" (@{message.Chat.Username})";
-            await LibraryDisplayService.ShowUserBorrowedBooksAsync(botClient, chatId, tgName, cancellationToken);
+            await LibraryDisplayService.ShowUserBorrowedBooksAsync(botClient, chatId, cancellationToken);
         }
     }
 
