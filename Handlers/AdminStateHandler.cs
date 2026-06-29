@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
@@ -13,9 +14,9 @@ namespace LibraryBot.Handlers
 {
     public static class AdminStateHandler
     {
-        public static async Task<bool> HandleAsync(ITelegramBotClient botClient, long chatId, string text, UserState state, CancellationToken cancellationToken)
+        public static async Task<bool> HandleAsync(ITelegramBotClient botClient, long chatId, string text, UserState state, CancellationToken cancellationToken, Message message = null)
         {
-            if (!string.IsNullOrEmpty(text) && (text.ToLower() == "/cancel" || text == "❌ Скасувати дію"))
+            if (!string.IsNullOrEmpty(text) && (text.ToLower() == "/cancel" || text == "❌ Скасувати дію" || text == "❌ Скасувати"))
             {
                 SessionManager.ClearSession(chatId);
                 await botClient.SendMessage(chatId, "Дію скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
@@ -76,12 +77,18 @@ namespace LibraryBot.Handlers
                         }
                         warning += "\nВиберіть, що робити далі:";
 
-                        var kb = new ReplyKeyboardMarkup(new[] {
-                            new KeyboardButton[] { "➕ Додати нову" },
-                            new KeyboardButton[] { "⬆️ Збільшити кількість на 1 у вже існуючої" },
-                            new KeyboardButton[] { "❌ Скасувати" }
-                        })
-                        { ResizeKeyboard = true };
+                        // Строим клавиатуру с отдельными кнопками для увеличения конкретной похожей книги
+                        var rows = new System.Collections.Generic.List<KeyboardButton[]>();
+                        // Кнопки для конкретных похожих книг (до 5)
+                        foreach (var b in similarBooks.Distinct().Take(5))
+                        {
+                            rows.Add(new KeyboardButton[] { $"⬆️ +1 {b}" });
+                        }
+                        // Общая кнопка добавить новую и отмена
+                        rows.Add(new KeyboardButton[] { "➕ Додати нову" });
+                        rows.Add(new KeyboardButton[] { "❌ Скасувати" });
+
+                        var kb = new ReplyKeyboardMarkup(rows.ToArray()) { ResizeKeyboard = true };
 
                         await botClient.SendMessage(chatId, warning, parseMode: ParseMode.Html, replyMarkup: kb, cancellationToken: cancellationToken);
                         return true;
@@ -102,10 +109,50 @@ namespace LibraryBot.Handlers
                     session.CurrentStep = 2;
                     SessionManager.UserStates[chatId] = UserState.None;
 
-                    var removeMsg = await botClient.SendMessage(chatId, "Продовжуємо...", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                    // Прибираємо Reply-клавіатуру
+                    var removeMsg = await botClient.SendMessage(chatId, "⏳ Продовжуємо...", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
                     try { await botClient.DeleteMessage(chatId, removeMsg.MessageId, cancellationToken); } catch { }
 
-                    await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                    // ДОДАНО: Видаляємо старе вікно майстра, яке "поїхало" вгору
+                    try { await botClient.DeleteMessage(chatId, session.WizardMessageId, cancellationToken); } catch { }
+
+                    // ВИПРАВЛЕНО: Передаємо null замість session.WizardMessageId, 
+                    // щоб бот надіслав НОВЕ повідомлення Майстра в самий низ чату!
+                    await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, null, cancellationToken);
+                    return true;
+                }
+                else if (text.StartsWith("⬆️ +1 "))
+                {
+                    // Пользователь выбрал конкретную похожую книгу для увеличения количества
+                    string chosenTitle = text.Substring("⬆️ +1 ".Length);
+                    var session = SessionManager.AdminBookSessions[chatId];
+                    var books = await LibraryDbService.GetBooksAsync();
+                    var row = books?.FirstOrDefault(b => b.Count > 0 && (b[0]?.ToString() ?? "") == chosenTitle);
+
+                    if (row != null)
+                    {
+                        int bookId = row.Count > LibraryDbService.COL_CATALOG_ID ? Convert.ToInt32(row[LibraryDbService.COL_CATALOG_ID]) : 0;
+                        string t = row.Count > 0 ? row[0]?.ToString() ?? "" : "";
+                        string a = row.Count > 1 ? row[1]?.ToString() ?? "" : "";
+                        string g = row.Count > 2 ? row[2]?.ToString() ?? "" : "";
+                        string e = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так";
+                        int ava = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int da) ? da : 0 : 0;
+                        int tot = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int dt) ? dt : 1 : 1;
+
+                        bool updated = await LibraryDbService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
+                        try { await botClient.DeleteMessage(chatId, session.WizardMessageId, cancellationToken); } catch { }
+
+                        if (updated)
+                            await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        else
+                            await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        await botClient.SendMessage(chatId, $"❌ Не вдалося зчитати дані з таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+
+                    SessionManager.ClearSession(chatId);
                     return true;
                 }
                 else if (text == "⬆️ Збільшити кількість на 1 у вже існуючої")
@@ -115,7 +162,8 @@ namespace LibraryBot.Handlers
 
                     if (bookId == 0)
                     {
-                        await botClient.SendMessage(chatId, "❌ Помилка: не вдалося знайти оригінальну книгу.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        // Если нет конкретного id, предложим выбрать из похожих
+                        await botClient.SendMessage(chatId, "❌ Не вдалося визначити конкретну книгу. Будь ласка, оберіть одну з перерахованих у списку, або додайте нову.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                         SessionManager.ClearSession(chatId);
                         return true;
                     }
@@ -134,6 +182,9 @@ namespace LibraryBot.Handlers
 
                         bool updated = await LibraryDbService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
 
+                        // Видаляємо старого майстра, щоб не засмічувати чат
+                        try { await botClient.DeleteMessage(chatId, session.WizardMessageId, cancellationToken); } catch { }
+
                         if (updated)
                             await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                         else
@@ -147,6 +198,12 @@ namespace LibraryBot.Handlers
                     SessionManager.ClearSession(chatId);
                     return true;
                 }
+                else if (text == "❌ Скасувати")
+                {
+                    SessionManager.ClearSession(chatId);
+                    await botClient.SendMessage(chatId, "Дію скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    return true;
+                }
                 else
                 {
                     await botClient.SendMessage(chatId, "❌ Будь ласка, скористайтеся кнопками нижче:", cancellationToken: cancellationToken);
@@ -154,18 +211,7 @@ namespace LibraryBot.Handlers
                 }
             }
 
-            if (state == UserState.WaitingForEditBookTitle)
-            {
-                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
-                {
-                    if (text != "-") session.Title = text;
-                    session.CurrentStep = 2;
-                    await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
-                }
-                return true;
-            }
-
-            if (state == UserState.WaitingForAddBookAuthor || state == UserState.WaitingForEditBookAuthor)
+            if (state == UserState.WaitingForAddBookAuthor)
             {
                 if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
                 {
@@ -176,7 +222,32 @@ namespace LibraryBot.Handlers
                 return true;
             }
 
-            if (state == UserState.WaitingForAddBookGenre || state == UserState.WaitingForEditBookGenre)
+            // --- НОВАЯ ЛОГИКА ТЕКСТОВОГО ВВОДА ДЛЯ МЕНЮ РЕДАКТИРОВАНИЯ ---
+            if (state == UserState.WaitingForEditBookTitle)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    session.Title = text;
+                    SessionManager.UserStates[chatId] = UserState.None; // Сбрасываем ожидание текста
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditBookAuthor)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    session.Author = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForAddBookGenre)
             {
                 if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
                 {
@@ -187,36 +258,126 @@ namespace LibraryBot.Handlers
                 return true;
             }
 
-            if (state == UserState.WaitingForAddBookQuantity)
+            if (state == UserState.WaitingForEditBookGenre)
             {
                 if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
                 {
-                    if (int.TryParse(text, out int qty) && qty > 0)
+                    session.Genre = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditBookQuantity)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    // Обработка +1, -2 или точного числа
+                    if (text.StartsWith("+") || text.StartsWith("-"))
                     {
-                        if (session.EditRowIndex != -1)
+                        if (int.TryParse(text, out int diff))
                         {
-                            int diff = qty - session.CurrentTotal;
-                            session.CurrentTotal = qty;
+                            session.CurrentTotal += diff;
                             session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                            SessionManager.UserStates[chatId] = UserState.None;
                         }
-                        else
-                        {
-                            session.CurrentAvailable = qty;
-                            session.CurrentTotal = qty;
-                        }
+                    }
+                    else if (int.TryParse(text, out int exactQty) && exactQty >= 0)
+                    {
+                        int diff = exactQty - session.CurrentTotal;
+                        session.CurrentTotal = exactQty;
+                        session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
                         SessionManager.UserStates[chatId] = UserState.None;
-                        await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                    }
+
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+
+                    if (SessionManager.UserStates[chatId] == UserState.None)
+                    {
+                        await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
                     }
                     else
                     {
-                        var msg = await botClient.SendMessage(chatId, "❌ Введіть коректне число (більше нуля).", cancellationToken: cancellationToken);
+                        var msg = await botClient.SendMessage(chatId, "❌ Введіть коректне число (наприклад `5` або `+1`).", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        _ = Task.Run(async () => { await Task.Delay(3000); try { await botClient.DeleteMessage(chatId, msg.MessageId, CancellationToken.None); } catch { } });
+                    }
+                }
+                return true;
+            }
 
-                        // Виправлено попередження про невідстежуваний Task
-                        _ = Task.Run(async () =>
+            // --- РЕДАКТИРОВАНИЕ ЧЕРЕЗ МЕНЮ (новые обработчики) ---
+            if (state == UserState.WaitingForEditMenuTitleInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Title = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditMenuAuthorInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Author = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditMenuGenreInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Genre = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditMenuQuantityInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    bool isValid = false;
+
+                    // Обработка +1, -2 или точного числа
+                    if (text.StartsWith("+") || text.StartsWith("-"))
+                    {
+                        if (int.TryParse(text, out int diff))
                         {
-                            await Task.Delay(3000);
-                            try { await botClient.DeleteMessage(chatId, msg.MessageId, CancellationToken.None); } catch { }
-                        });
+                            session.CurrentTotal += diff;
+                            session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                            isValid = true;
+                        }
+                    }
+                    else if (int.TryParse(text, out int exactQty) && exactQty >= 0)
+                    {
+                        int diff = exactQty - session.CurrentTotal;
+                        session.CurrentTotal = exactQty;
+                        session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                        isValid = true;
+                    }
+
+                    if (isValid)
+                    {
+                        SessionManager.UserStates[chatId] = UserState.None;
+                        try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                        await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                    }
+                    else
+                    {
+                        var msg = await botClient.SendMessage(chatId, "❌ Введіть коректне число (наприклад `5` або `+1`).", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        _ = Task.Run(async () => { await Task.Delay(3000); try { await botClient.DeleteMessage(chatId, msg.MessageId, CancellationToken.None); } catch { } });
                     }
                 }
                 return true;

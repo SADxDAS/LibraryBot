@@ -115,5 +115,49 @@ namespace LibraryBot.UI
                 session.WizardMessageId = msg.MessageId;
             }
         }
+        // ДОБАВИТЬ В КЛАСС WizardHelper
+        public static async Task SendOrUpdateEditDashboardAsync(ITelegramBotClient botClient, long chatId, AdminBookSession session, int? existingMsgId = null, CancellationToken ct = default)
+        {
+            string text = $"🛠 <b>Панель редагування книги</b>\n\n";
+            text += $"📖 Назва: <b>{TextUtils.EscapeHtml(session.Title)}</b>\n";
+            text += $"👤 Автор: <b>{TextUtils.EscapeHtml(session.Author)}</b>\n";
+            text += $"🎭 Жанр: <b>{TextUtils.EscapeHtml(session.Genre)}</b>\n";
+            text += $"📦 Доступно/Всього: <b>{session.CurrentAvailable} / {session.CurrentTotal}</b>\n";
+            text += $"🔄 Обмін: <b>{session.ExchangeStatus}</b>\n\n";
+            text += "👇 <i>Оберіть параметр, який хочете змінити:</i>";
+
+            var buttons = new List<InlineKeyboardButton[]>
+            {
+                new[] {
+                    InlineKeyboardButton.WithCallbackData("✏️ Назва", "edit_menu_title"),
+                    InlineKeyboardButton.WithCallbackData("✏️ Автор", "edit_menu_author")
+                },
+                new[] {
+                    InlineKeyboardButton.WithCallbackData("✏️ Жанр", "edit_menu_genre"),
+                    InlineKeyboardButton.WithCallbackData("📦 Кількість", "edit_menu_qty")
+                }
+            };
+
+            // Чекбокс для обмена
+            string exchToggle = session.ExchangeStatus == "Так" ? "🔄 Обмін: ✅ Так" : "🔄 Обмін: ❌ Ні";
+            buttons.Add(new[] { InlineKeyboardButton.WithCallbackData(exchToggle, "edit_menu_exch") });
+
+            buttons.Add(new[] {
+                InlineKeyboardButton.WithCallbackData("❌ Скасувати", "edit_menu_cancel"),
+                InlineKeyboardButton.WithCallbackData("💾 ЗБЕРЕГТИ", "edit_menu_save")
+            });
+
+            var keyboard = new InlineKeyboardMarkup(buttons);
+
+            if (existingMsgId.HasValue && existingMsgId.Value > 0)
+            {
+                try { await botClient.EditMessageText(chatId, existingMsgId.Value, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: ct); } catch { }
+            }
+            else
+            {
+                var msg = await botClient.SendMessage(chatId, text, parseMode: ParseMode.Html, replyMarkup: keyboard, cancellationToken: ct);
+                session.WizardMessageId = msg.MessageId;
+            }
+        }
     }
 }

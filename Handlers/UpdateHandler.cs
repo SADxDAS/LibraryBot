@@ -124,7 +124,60 @@ namespace LibraryBot.Handlers
             long chatId = message.Chat.Id;
             string messageText = message.Text?.Trim() ?? "";
 
-            // 1. ПЕРЕВІРЯЄМО, ЧИ ЦЕ ТЕКСТ КОМАНДИ МЕНЮ
+            // 1. ПЕРЕВІРКА: Чи активний зараз "Майстер" (Wizard)?
+            bool isWizardActive = SessionManager.AdminBookSessions.ContainsKey(chatId)
+                                  && SessionManager.AdminBookSessions[chatId].CurrentStep > 0;
+
+            if (isWizardActive)
+            {
+                // Дозволяємо скасування
+                if (messageText == "/cancel" || messageText == "❌ Скасувати дію")
+                {
+                    await AdminStateHandler.HandleAsync(botClient, chatId, messageText, UserState.None, cancellationToken);
+                    return;
+                }
+
+                var isCommand = _commands.Any(c => c.Triggers.Contains(messageText));
+
+                if (!isCommand)
+                {
+                    // Намагаємося згодувати текст Майстру (наприклад, введення назви чи автора)
+                    bool handled = await AdminStateHandler.HandleAsync(botClient, chatId, messageText, SessionManager.UserStates.GetValueOrDefault(chatId, UserState.None), cancellationToken);
+
+                    if (!handled)
+                    {
+                        // Якщо Майстру зараз текст НЕ потрібен (наприклад, він чекає натискання інлайн-кнопки кількості)
+                        // ми просто мовчки видаляємо випадкове повідомлення адміна, щоб воно не заважало.
+                        try { await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    }
+
+                    // 🛑 ГОЛОВНЕ: БЛОКУЄМО ВИКОНАННЯ. Текст ніколи не дійде до автопошуку.
+                    return;
+                }
+                else
+                {
+                    // Якщо адмін ввів іншу команду (наприклад, /start) під час роботи майстра - блокуємо
+                    var warningMsg = await botClient.SendMessage(chatId, "⚠️ <b>Ви зараз у режимі додавання/редагування книги.</b>\nЗавершіть процес кнопками або натисніть «❌ Скасувати дію».",
+                        parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+
+                    try { await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+
+                    // Видаляємо попередження через 4 секунди, щоб не засмічувати чат
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(4000);
+                        try { await botClient.DeleteMessage(chatId, warningMsg.MessageId, CancellationToken.None); } catch { }
+                    });
+
+                    return; // 🛑 БЛОКУЄМО ВИКОНАННЯ
+                }
+            }
+
+            // ====================================================================
+            // СТАНДАРТНА ЛОГІКА БОТА (Виконується ТІЛЬКИ якщо Майстер НЕ активний)
+            // ====================================================================
+
+            // 2. ПЕРЕВІРЯЄМО, ЧИ ЦЕ ТЕКСТ КОМАНДИ МЕНЮ
             var command = _commands.FirstOrDefault(c => c.Triggers.Contains(messageText));
 
             if (command != null)
@@ -133,7 +186,7 @@ namespace LibraryBot.Handlers
                 return;
             }
 
-            // 2. ЯКЩО ЦЕ НЕ КНОПКА МЕНЮ — НАПРАВЛЯЄМО ТЕКСТ У СТЕЙТ-МАШИНУ
+            // 3. НАПРАВЛЯЄМО ТЕКСТ У СТЕЙТ-МАШИНУ (якщо є активний стан)
             var currentState = SessionManager.UserStates.GetValueOrDefault(chatId, UserState.None);
 
             if (currentState != UserState.None && SessionManager.AdminIds.Contains(chatId))
@@ -146,9 +199,7 @@ namespace LibraryBot.Handlers
                 if (await UserStateHandler.HandleAsync(botClient, message, currentState, cancellationToken)) return;
             }
 
-            // 3. ДІЯ ЗА ЗАМОВЧУВАННЯМ: АВТОМАТИЧНИЙ ПОШУК
-            // Якщо повідомлення дійшло сюди (не команда і немає активного стану),
-            // бот автоматично вважає це запитом на пошук книги.
+            // 4. ДІЯ ЗА ЗАМОВЧУВАННЯМ: АВТОМАТИЧНИЙ ПОШУК
             if (!string.IsNullOrEmpty(messageText))
             {
                 await LibraryDisplayService.SearchBooksAsync(botClient, chatId, messageText, cancellationToken);

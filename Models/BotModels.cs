@@ -36,6 +36,11 @@
         WaitingForEditBookQuantity,
         WaitingForUserExchangeSearchQuery,
         WaitingForAddBookDuplicateCheck,
+        // Нові стани для меню редагування
+        WaitingForEditMenuTitleInput,
+        WaitingForEditMenuAuthorInput,
+        WaitingForEditMenuGenreInput,
+        WaitingForEditMenuQuantityInput,
     }
 
     public class ManualBorrowingSession
