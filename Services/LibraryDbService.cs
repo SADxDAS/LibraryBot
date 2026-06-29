@@ -395,6 +395,25 @@ namespace LibraryBot.Services
 
             await db.SaveChangesAsync();
         }
+        // Знаходить книги, у яких (Total - Available) > кількості видач на руках
+        public static async Task<List<(int BookId, string Title, int LostCount)>> GetLostBooksAsync()
+        {
+            using var db = new AppDbContext();
+
+            var query = await db.Books
+                .Select(b => new {
+                    b.Id,
+                    b.Title,
+                    b.TotalCount,
+                    b.AvailableCount,
+                    ActiveBorrows = b.Borrowings.Count(borrow => borrow.ReturnDate == null)
+                })
+                // Шукаємо розбіжність
+                .Where(x => (x.TotalCount - x.AvailableCount) > x.ActiveBorrows)
+                .ToListAsync();
+
+            return query.Select(x => (x.Id, x.Title, (x.TotalCount - x.AvailableCount) - x.ActiveBorrows)).ToList();
+        }
         public static async Task<List<(string Title, string Name, string Contact, string DueDate)>> GetActiveBorrowingsAsync()
         {
             using var db = new AppDbContext();

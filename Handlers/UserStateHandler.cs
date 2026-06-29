@@ -98,15 +98,11 @@ namespace LibraryBot.Handlers
             }
 
             // КРОК 2: Користувач натиснув одну з кнопок контакту
+            // КРОК 2: Користувач натиснув одну з кнопок контакту
             if (currentState == UserState.WaitingForBorrowContactMethod)
             {
                 var session = SessionManager.BorrowSessions[chatId];
-                if (!string.IsNullOrEmpty(session.RealName) && !string.IsNullOrEmpty(session.Contact))
-                {
-                    await LibraryDbService.SaveOrUpdateUserAsync(chatId, session.RealName, session.Contact);
-                }
 
-                SessionManager.UserStates[chatId] = UserState.WaitingForBorrowPeriod;
                 // Якщо людина відправила КОНТАКТ (натиснула "Поділитися номером")
                 if (message.Type == MessageType.Contact && message.Contact != null)
                 {
@@ -144,7 +140,6 @@ namespace LibraryBot.Handlers
                 await botClient.SendMessage(chatId, "Будь ласка, скористайтеся кнопками меню нижче 👇", cancellationToken: cancellationToken);
                 return true;
             }
-
             // КРОК 3: Ручне введення (Instagram або Інше)
             if (currentState == UserState.WaitingForBorrowContactInput)
             {
@@ -171,8 +166,24 @@ namespace LibraryBot.Handlers
         }
 
         // Допоміжний метод, щоб не дублювати код переходу до вибору періоду
+        // Допоміжний метод, щоб не дублювати код переходу до вибору періоду
         private static async Task<bool> ProceedToPeriodSelection(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
         {
+            var session = SessionManager.BorrowSessions[chatId];
+
+            // НОВЕ: Зберігаємо або оновлюємо профіль ТУТ, коли всі дані вже зібрані
+            if (!string.IsNullOrEmpty(session.RealName) && !string.IsNullOrEmpty(session.Contact))
+            {
+                await LibraryDbService.SaveOrUpdateUserAsync(chatId, session.RealName, session.Contact);
+            }
+            // НОВОЕ: Перехватываем режим редактирования профиля
+            if (session.BookTitle == "EDIT_PROFILE_MODE")
+            {
+                SessionManager.UserStates[chatId] = UserState.None;
+                SessionManager.BorrowSessions.TryRemove(chatId, out _);
+                await botClient.SendMessage(chatId, "✅ Ваш профіль успішно оновлено!", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                return true; // Прерываем выполнение, книгу не выдаем
+            }
             SessionManager.UserStates[chatId] = UserState.WaitingForBorrowPeriod;
 
             // 1. Повертаємо нормальне головне меню вниз!

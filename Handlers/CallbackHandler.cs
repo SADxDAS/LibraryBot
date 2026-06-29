@@ -530,6 +530,22 @@ namespace LibraryBot.Handlers
 
                 try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
             }
+            else if (callbackQuery.Data == "edit_profile")
+            {
+                // Очищаем старые сообщения (опционально)
+                try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch { }
+
+                // Создаем сессию-заглушку с кодовым именем
+                SessionManager.BorrowSessions[chatId] = new Models.UserBorrowingSession
+                {
+                    BookTitle = "EDIT_PROFILE_MODE",
+                    CatalogRowIndex = -1
+                };
+
+                SessionManager.UserStates[chatId] = Models.UserState.WaitingForBorrowRealName;
+
+                await botClient.SendMessage(chatId, "✍️ Введіть ваше нове <b>Справжнє Ім'я та Прізвище</b>:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+            }
             else if (callbackQuery.Data.StartsWith("act_man_b_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
@@ -577,6 +593,27 @@ namespace LibraryBot.Handlers
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     await botClient.SendMessage(chatId, $"✅ Книгу '<b>{title}</b>' успішно повернуто вручну від офлайн-користувача! Статус оновлено.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+            }
+            else if (callbackQuery.Data.StartsWith("fix_lost_"))
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+
+                int bookId = int.Parse(callbackQuery.Data.Substring(9));
+
+                // Додаємо +1 до доступних примірників (AvailableCount)
+                bool success = await LibraryDbService.ChangeAvailableCountAsync(bookId, 1);
+
+                if (success)
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "✅ +1 примірник успішно повернуто на полицю!", showAlert: true, cancellationToken: cancellationToken); } catch { }
+
+                    // Відправляємо підтвердження і просимо перевірити ще раз
+                    await botClient.SendMessage(chatId, "✅ <b>1 примірник відновлено.</b>\nНатисніть /audit ще раз, щоб переконатися, що розбіжностей більше немає.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Помилка відновлення. Книгу не знайдено.", showAlert: true, cancellationToken: cancellationToken); } catch { }
                 }
             }
             else if (callbackQuery.Data.StartsWith("period_"))
@@ -640,4 +677,5 @@ namespace LibraryBot.Handlers
                 b.Count > LibraryDbService.COL_CATALOG_ID
                 && System.Convert.ToInt32(b[LibraryDbService.COL_CATALOG_ID]) == bookId);
     }
+
 }

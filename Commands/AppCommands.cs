@@ -1,9 +1,11 @@
 ﻿using LibraryBot.Models;
 using LibraryBot.Services;
 using LibraryBot.UI;
+using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using LibraryBot.Commands; // Щоб отримати доступ до інтерфейсу ICommand та всіх класів команд
+using System.Collections.Generic;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 
@@ -234,6 +236,8 @@ namespace LibraryBot.Commands
         }
 
     }
+
+    // --- ОНОВЛЕНА КОМАНДА ПРОФІЛЮ ---
     public class MyProfileCommand : ICommand
     {
         public string[] Triggers => new[] { "/profile", "👤 Мій профіль" };
@@ -243,10 +247,14 @@ namespace LibraryBot.Commands
             long chatId = message.Chat.Id;
             SessionManager.ClearSession(chatId);
 
-            // Показуємо, що бот думає, поки вантажить дані
             var loadingMsg = await botClient.SendMessage(chatId, "⏳ Формую вашу читацьку картку...", cancellationToken: cancellationToken);
 
             var profileData = await LibraryDbService.GetUserProfileAsync(chatId);
+
+            // НОВЕ: Завантажуємо дані профілю з бази даних (ім'я та контакт)
+            var dbUser = await LibraryDbService.GetUserAsync(chatId);
+            string realName = dbUser != null && !string.IsNullOrEmpty(dbUser.RealName) ? dbUser.RealName : "Не вказано";
+            string contactInfo = dbUser != null && !string.IsNullOrEmpty(dbUser.Contact) ? dbUser.Contact : "Не вказано";
 
             // ГЕЙМІФІКАЦІЯ: Визначаємо ранг користувача
             string rank = "Новачок 🌱";
@@ -262,6 +270,11 @@ namespace LibraryBot.Commands
             text += $"📖 Прочитано книг: <b>{profileData.ReadCount}</b>\n";
             text += $"⏳ Зараз на руках: <b>{profileData.CurrentlyReadingCount}</b>\n\n";
 
+            // НОВЕ: Додаємо інформацію про ім'я та контакт у повідомлення
+            text += $"📋 <b>Ваші дані для бібліотеки:</b>\n";
+            text += $"Ім'я: <b>{TextUtils.EscapeHtml(realName)}</b>\n";
+            text += $"Контакт: <code>{TextUtils.EscapeHtml(contactInfo)}</code>\n\n";
+
             if (profileData.CurrentlyReadingCount > 0)
             {
                 text += "<b>Зараз ви читаєте:</b>\n";
@@ -272,7 +285,6 @@ namespace LibraryBot.Commands
             if (profileData.ReadCount > 0)
             {
                 text += "<b>Ваша історія прочитаного:</b>\n";
-                // Беремо останні 10 книг, щоб повідомлення не було гігантським
                 var recentRead = System.Linq.Enumerable.Reverse(profileData.ReadBooks).Take(10);
                 foreach (var b in recentRead) text += $"✅ <i>{TextUtils.EscapeHtml(b)}</i>\n";
 
@@ -284,11 +296,22 @@ namespace LibraryBot.Commands
                 text += "<i>Ви ще не прочитали жодної книги з нашої бібліотеки. Час це виправити! 😉</i>";
             }
 
-            // Видаляємо повідомлення "Формую..." і надсилаємо готовий красивий профіль
             await botClient.DeleteMessage(chatId, loadingMsg.MessageId, cancellationToken);
-            await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+
+            // НОВЕ: Створюємо інлайн-кнопку для редагування
+            var inlineKeyboard = new Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(new[]
+            {
+                new[] { Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton.WithCallbackData("✏️ Редагувати дані", "edit_profile") }
+            });
+
+            // Відправляємо профіль з інлайн-кнопкою
+            await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: inlineKeyboard, cancellationToken: cancellationToken);
+
+            // Відправляємо окреме повідомлення, щоб зберегти звичайну клавіатуру меню знизу
+            await botClient.SendMessage(chatId, "<i>Оберіть дію в меню 👇</i>", parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
         }
     }
+
     public class AdminStatsCommand : ICommand
     {
         public string[] Triggers => new[] { "/stats", "📊 Статистика" };
@@ -321,7 +344,6 @@ namespace LibraryBot.Commands
 
             await botClient.DeleteMessage(chatId, loadingMsg.MessageId, cancellationToken);
 
-            // Якщо є боржники - додаємо інлайн-кнопку під повідомленням
             if (stats.OverdueBooks > 0)
             {
                 var inlineKeyboard = new Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(new[]
@@ -332,9 +354,49 @@ namespace LibraryBot.Commands
             }
             else
             {
-                // Якщо боржників немає, просто відправляємо текст
                 await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, cancellationToken: cancellationToken);
             }
+        }
+    }
+    public class AuditCommand : ICommand
+    {
+        public string[] Triggers => new[] { "/audit", "🔎 Аудит" };
+
+        public async Task ExecuteAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        {
+            long chatId = message.Chat.Id;
+            if (!SessionManager.AdminIds.Contains(chatId)) return;
+
+            SessionManager.ClearSession(chatId);
+            var loadingMsg = await botClient.SendMessage(chatId, "⏳ Запускаю перевірку бази даних...", cancellationToken: cancellationToken);
+
+            var lostBooks = await LibraryDbService.GetLostBooksAsync();
+
+            await botClient.DeleteMessage(chatId, loadingMsg.MessageId, cancellationToken);
+
+            if (lostBooks.Count == 0)
+            {
+                await botClient.SendMessage(chatId, "✅ <b>Усе ідеально сходиться!</b>\nЖодного загубленого примірника не знайдено.", parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, cancellationToken: cancellationToken);
+                return;
+            }
+
+            string text = "⚠️ <b>Знайдено розбіжності у фонді!</b>\nЦі книги недоступні для видачі, але їх немає на руках у читачів:\n\n";
+            var buttons = new List<Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton[]>();
+
+            foreach (var b in lostBooks)
+            {
+                text += $"📖 <b>{TextUtils.EscapeHtml(b.Title)}</b>\n";
+                text += $"❓ Загублено примірників: <b>{b.LostCount}</b>\n➖➖➖➖➖➖\n";
+
+                // Обрізаємо назву для кнопки, якщо вона задовга
+                string shortTitle = b.Title.Length > 20 ? b.Title.Substring(0, 17) + "..." : b.Title;
+
+                // Створюємо інлайн кнопку для кожної проблемної книги
+                buttons.Add(new[] { Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton.WithCallbackData($"➕ Повернути +1 ({shortTitle})", $"fix_lost_{b.BookId}") });
+            }
+
+            var inlineKeyboard = new Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(buttons);
+            await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: inlineKeyboard, cancellationToken: cancellationToken);
         }
     }
     public class AdminBorrowingsListCommand : ICommand
@@ -381,17 +443,13 @@ namespace LibraryBot.Commands
 
             var inlineKeyboard = GetPaginationKeyboard(page, totalPages);
 
-            // Відправляємо повідомлення з інлайн-кнопками, але залишаємо і звичайну клавіатуру
             await botClient.SendMessage(chatId, text, parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: inlineKeyboard, cancellationToken: cancellationToken);
-
-            // Про всяк випадок оновлюємо нижнє меню
             await botClient.SendMessage(chatId, "<i>Оберіть дію в меню 👇</i>", parseMode: Telegram.Bot.Types.Enums.ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
         }
 
-        // Допоміжний метод для створення кнопок пагінації
         public static Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup GetPaginationKeyboard(int currentPage, int totalPages)
         {
-            if (totalPages <= 1) return null; // Якщо сторінка всього одна, кнопки не потрібні
+            if (totalPages <= 1) return null;
 
             var buttons = new List<Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton>();
 
