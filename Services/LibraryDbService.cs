@@ -8,7 +8,7 @@ using LibraryBot.Models;
 
 namespace LibraryBot.Services
 {
-    public class GoogleSheetsService
+    public class LibraryDbService
     {
         public const int COL_CATALOG_TITLE = 0;
         public const int COL_CATALOG_AUTHOR = 1;
@@ -365,7 +365,36 @@ namespace LibraryBot.Services
             }
             return result;
         }
+        // Отримує збережений профіль читача (якщо він є)
+        public static async Task<DbUser?> GetUserAsync(long chatId)
+        {
+            using var db = new AppDbContext();
+            return await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.ChatId == chatId);
+        }
 
+        // Зберігає або оновлює профіль читача
+        public static async Task SaveOrUpdateUserAsync(long chatId, string realName, string contact)
+        {
+            using var db = new AppDbContext();
+            var user = await db.Users.FindAsync(chatId);
+
+            if (user == null)
+            {
+                db.Users.Add(new DbUser
+                {
+                    ChatId = chatId,
+                    RealName = realName,
+                    Contact = contact
+                });
+            }
+            else
+            {
+                user.RealName = realName;
+                user.Contact = contact;
+            }
+
+            await db.SaveChangesAsync();
+        }
         public static async Task<List<(string Title, string Name, string Contact, string DueDate)>> GetActiveBorrowingsAsync()
         {
             using var db = new AppDbContext();
@@ -382,4 +411,5 @@ namespace LibraryBot.Services
             return result;
         }
     }
+
 }

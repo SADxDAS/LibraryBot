@@ -246,7 +246,7 @@ namespace LibraryBot.Commands
             // Показуємо, що бот думає, поки вантажить дані
             var loadingMsg = await botClient.SendMessage(chatId, "⏳ Формую вашу читацьку картку...", cancellationToken: cancellationToken);
 
-            var profileData = await GoogleSheetsService.GetUserProfileAsync(chatId);
+            var profileData = await LibraryDbService.GetUserProfileAsync(chatId);
 
             // ГЕЙМІФІКАЦІЯ: Визначаємо ранг користувача
             string rank = "Новачок 🌱";
@@ -302,7 +302,7 @@ namespace LibraryBot.Commands
 
             var loadingMsg = await botClient.SendMessage(chatId, "⏳ Збираю статистику...", cancellationToken: cancellationToken);
 
-            var stats = await GoogleSheetsService.GetLibraryStatisticsAsync();
+            var stats = await LibraryDbService.GetLibraryStatisticsAsync();
 
             string text = "📊 <b>Статистика Бібліотеки</b>\n\n";
             text += $"📚 Загальний книжковий фонд: <b>{stats.TotalBooks}</b> прим.\n";
@@ -350,7 +350,7 @@ namespace LibraryBot.Commands
 
             var loadingMsg = await botClient.SendMessage(chatId, "⏳ Завантажую список активних видач...", cancellationToken: cancellationToken);
 
-            var activeList = await GoogleSheetsService.GetActiveBorrowingsAsync();
+            var activeList = await LibraryDbService.GetActiveBorrowingsAsync();
 
             await botClient.DeleteMessage(chatId, loadingMsg.MessageId, cancellationToken);
 

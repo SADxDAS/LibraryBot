@@ -18,13 +18,6 @@ namespace LibraryBot
             // 1. Завантажуємо локальний .env (якщо він є. На Railway його немає - і це ок)
             try { Env.Load(); } catch { }
 
-            // 0. РЕЖИМ МІГРАЦІЇ: dotnet run -- migrate
-            //    Одноразово переносить дані зі старих Google Sheets у PostgreSQL і виходить.
-            if (args.Length > 0 && args[0].Equals("migrate", StringComparison.OrdinalIgnoreCase))
-            {
-                await SheetsMigrationService.RunAsync();
-                return;
-            }
 
             // РЕЖИМ ПЕРЕВІРКИ БД: dotnet run -- dbtest
             //    Швидко перевіряє з'єднання з PostgreSQL (без читання таблиць) і виходить.
@@ -77,7 +70,7 @@ namespace LibraryBot
             //    потрібні лише одноразовій команді `migrate` (вона перевіряє їх сама).
             try
             {
-                GoogleSheetsService.Initialize();
+                LibraryDbService.Initialize();
             }
             catch (Exception ex)
             {

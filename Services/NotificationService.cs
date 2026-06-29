@@ -12,7 +12,7 @@ namespace LibraryBot.Services
     {
         public static async Task CheckDeadlinesAsync(ITelegramBotClient botClient, CancellationToken cancellationToken)
         {
-            var borrowings = await GoogleSheetsService.GetAllBorrowingsAsync();
+            var borrowings = await LibraryDbService.GetAllBorrowingsAsync();
             if (borrowings == null || borrowings.Count == 0) return;
 
             DateTime today = DateTime.Now.Date;

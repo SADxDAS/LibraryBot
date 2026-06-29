@@ -14,7 +14,7 @@ namespace LibraryBot.Services
     {
         public static async Task SendOrEditBooksPageAsync(ITelegramBotClient botClient, long chatId, int pageIndex, int? messageIdToEdit, CancellationToken cancellationToken)
         {
-            var books = await GoogleSheetsService.GetBooksAsync();
+            var books = await LibraryDbService.GetBooksAsync();
 
             if (books == null || books.Count == 0)
             {
@@ -104,14 +104,14 @@ namespace LibraryBot.Services
                 if (row.Count == 0) continue;
                 if (CardTotal(row) <= 0) continue; // приховані (списані) книги — Total=0 — не показуємо в пошуку
 
-                string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
-                string author = row.Count > 1 ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
+                string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                string author = row.Count > 1 ? row[LibraryDbService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
 
                 double score = compiledQuery.Score(title, author);
                 if (score > 0)
                 {
-                    int bookId = row.Count > GoogleSheetsService.COL_CATALOG_ID
-                        ? Convert.ToInt32(row[GoogleSheetsService.COL_CATALOG_ID])
+                    int bookId = row.Count > LibraryDbService.COL_CATALOG_ID
+                        ? Convert.ToInt32(row[LibraryDbService.COL_CATALOG_ID])
                         : 0;
                     scored.Add((bookId, row, score));
                 }
@@ -125,7 +125,7 @@ namespace LibraryBot.Services
 
         public static async Task SearchBooksAsync(ITelegramBotClient botClient, long chatId, string query, CancellationToken cancellationToken)
         {
-            var books = await GoogleSheetsService.GetBooksAsync();
+            var books = await LibraryDbService.GetBooksAsync();
             SessionManager.ClearSession(chatId);
 
             if (books == null || books.Count == 0)
@@ -144,7 +144,7 @@ namespace LibraryBot.Services
             }
 
             await botClient.SendMessage(chatId, $"🔍 Знайдено книг: {foundBooks.Count}. Ось результати:", cancellationToken: cancellationToken);
-            var userBorrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(chatId);
+            var userBorrowedBooks = await LibraryDbService.GetUserBorrowedBooksAsync(chatId);
             var userBorrowedRowIndexes = userBorrowedBooks.Select(b => b.BookId).ToHashSet();
 
             foreach (var item in foundBooks.Take(5))
@@ -165,8 +165,8 @@ namespace LibraryBot.Services
                     : (disponible > 0 ? "Доступна" : "Читають");
 
                 // Чи доступна книга для обміну (буккросингу)
-                string exchange = item.Data.Count > GoogleSheetsService.COL_CATALOG_EXCHANGE
-                    ? item.Data[GoogleSheetsService.COL_CATALOG_EXCHANGE]?.ToString()?.Trim() ?? "Так"
+                string exchange = item.Data.Count > LibraryDbService.COL_CATALOG_EXCHANGE
+                    ? item.Data[LibraryDbService.COL_CATALOG_EXCHANGE]?.ToString()?.Trim() ?? "Так"
                     : "Так";
                 bool isExchangeable = !exchange.Equals("Ні", StringComparison.OrdinalIgnoreCase);
                 string exchangeLine = !isExchangeable
@@ -202,7 +202,7 @@ namespace LibraryBot.Services
 
         public static async Task ShowUserBorrowedBooksAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
         {
-            var borrowedBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(chatId);
+            var borrowedBooks = await LibraryDbService.GetUserBorrowedBooksAsync(chatId);
 
             if (borrowedBooks == null || borrowedBooks.Count == 0)
             {
@@ -234,7 +234,7 @@ namespace LibraryBot.Services
             CancellationToken cancellationToken,
             Func<(int BookId, IList<object> Data), bool>? filter = null)
         {
-            var books = await GoogleSheetsService.GetBooksAsync();
+            var books = await LibraryDbService.GetBooksAsync();
             SessionManager.ClearSession(chatId);
 
             if (books == null || books.Count == 0)
@@ -335,7 +335,7 @@ namespace LibraryBot.Services
         // ПОШУК ДЛЯ КОРИСТУВАЦЬКОГО ОБМІНУ
         public static async Task SearchBooksForUserExchangeAsync(ITelegramBotClient botClient, long chatId, string query, CancellationToken cancellationToken)
         {
-            var books = await GoogleSheetsService.GetBooksAsync();
+            var books = await LibraryDbService.GetBooksAsync();
             if (books == null || books.Count == 0)
             {
                 await botClient.SendMessage(chatId, "Каталог порожній.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);

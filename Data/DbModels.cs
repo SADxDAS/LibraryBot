@@ -85,4 +85,15 @@ namespace LibraryBot.Data
         public string TelegramName { get; set; } = string.Empty;
         public DateTime ExchangeDate { get; set; }
     }
+    // Таблиця "Користувачі" (Профіль)
+    public class DbUser
+    {
+        [Key]
+        public long ChatId { get; set; } // Використовуємо Telegram ID як первинний ключ
+
+        public string RealName { get; set; } = string.Empty;
+        public string Contact { get; set; } = string.Empty;
+
+        public DateTime RegistrationDate { get; set; } = DateTime.UtcNow;
+    }
 }

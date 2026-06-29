@@ -31,7 +31,7 @@ namespace LibraryBot.Handlers
                 session.EditRowIndex = 0; // Скидаємо індекс перед пошуком
 
                 // Завантажуємо існуючі книги для перевірки на дублікати
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var similarBooks = new System.Collections.Generic.List<string>();
 
                 if (books != null)
@@ -55,8 +55,8 @@ namespace LibraryBot.Handlers
                                 {
                                     similarBooks.Add(existingTitle);
                                     // Зберігаємо стабільний Id найпершого збігу, щоб потім зробити йому +1
-                                    if (session.EditRowIndex == 0 && row.Count > GoogleSheetsService.COL_CATALOG_ID)
-                                        session.EditRowIndex = System.Convert.ToInt32(row[GoogleSheetsService.COL_CATALOG_ID]);
+                                    if (session.EditRowIndex == 0 && row.Count > LibraryDbService.COL_CATALOG_ID)
+                                        session.EditRowIndex = System.Convert.ToInt32(row[LibraryDbService.COL_CATALOG_ID]);
                                 }
                             }
                         }
@@ -115,8 +115,8 @@ namespace LibraryBot.Handlers
                         return true;
                     }
 
-                    var books = await GoogleSheetsService.GetBooksAsync();
-                    var row = books?.FirstOrDefault(b => b.Count > GoogleSheetsService.COL_CATALOG_ID && System.Convert.ToInt32(b[GoogleSheetsService.COL_CATALOG_ID]) == bookId);
+                    var books = await LibraryDbService.GetBooksAsync();
+                    var row = books?.FirstOrDefault(b => b.Count > LibraryDbService.COL_CATALOG_ID && System.Convert.ToInt32(b[LibraryDbService.COL_CATALOG_ID]) == bookId);
                     if (row != null)
                     {
                         // Зчитуємо всі поточні дані з рядка
@@ -128,7 +128,7 @@ namespace LibraryBot.Handlers
                         int tot = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int dt) ? dt : 1 : 1;
 
                         // Перезаписуємо рядок, роблячи +1 до обох колонок (Доступно і Всього)
-                        bool updated = await GoogleSheetsService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
+                        bool updated = await LibraryDbService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
 
                         if (updated)
                             await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
@@ -207,7 +207,7 @@ namespace LibraryBot.Handlers
                 int qty = session.Quantity > 0 ? session.Quantity : 1;
 
                 // Отримуємо результат: true якщо успішно, false якщо Google видав помилку
-                bool success = await GoogleSheetsService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, exchangeStatus, qty);
+                bool success = await LibraryDbService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, exchangeStatus, qty);
                 SessionManager.ClearSession(chatId);
 
                 if (success)
@@ -331,7 +331,7 @@ namespace LibraryBot.Handlers
                 else if (text.ToLower() == "ні") finalExch = "Ні";
 
                 // Викликаємо наш новий метод і передаємо текстові поля + прораховані кількості
-                bool updated = await GoogleSheetsService.UpdateBookInCatalogAsync(
+                bool updated = await LibraryDbService.UpdateBookInCatalogAsync(
                     session.EditRowIndex, 
                     session.Title!, 
                     session.Author!, 
@@ -403,16 +403,16 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminExchangeSessions[chatId];
 
                 // 1. Записуємо в лог обміну
-                await GoogleSheetsService.AddExchangeLogAsync(session.OldBookTitle, session.NewBookTitle, session.ReaderName);
+                await LibraryDbService.AddExchangeLogAsync(session.OldBookTitle, session.NewBookTitle, session.ReaderName);
 
                 // 2. Списуємо стару книгу з балансу за точним індексом рядка (у критичній секції книги)
                 using (await AsyncKeyedLock.LockAsync($"book:{session.OldBookRowIndex}", cancellationToken))
                 {
-                    await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle);
+                    await LibraryDbService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle);
                 }
 
                 // 3. Додаємо нову книгу (передаємо вибраний exchangeStatus замість захардкодженного "Так", кількість 1 шт)
-                await GoogleSheetsService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, exchangeStatus, 1);
+                await LibraryDbService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, exchangeStatus, 1);
 
                 SessionManager.ClearSession(chatId);
 
@@ -443,9 +443,9 @@ namespace LibraryBot.Handlers
                 // інший адмін міг видати останній примірник. Видаємо борровінг ЛИШЕ якщо списання вдалося.
                 using (await AsyncKeyedLock.LockAsync($"book:{session.CatalogRowIndex}", cancellationToken))
                 {
-                    if (await GoogleSheetsService.TryDecrementAvailableAsync(session.CatalogRowIndex))
+                    if (await LibraryDbService.TryDecrementAvailableAsync(session.CatalogRowIndex))
                     {
-                        await GoogleSheetsService.AddBorrowingAsync(session.BookId!, session.ReaderName!, "Офлайн читач", session.ReaderContact!, 0, DateTime.Now.AddDays(30));
+                        await LibraryDbService.AddBorrowingAsync(session.BookId!, session.ReaderName!, "Офлайн читач", session.ReaderContact!, 0, DateTime.Now.AddDays(30));
                         SessionManager.ClearSession(chatId);
                         await botClient.SendMessage(chatId, $"✅ Готово! Книга '<b>{TextUtils.EscapeHtml(session.BookId)}</b>' видана читачу <b>{TextUtils.EscapeHtml(session.ReaderName)}</b> ({TextUtils.EscapeHtml(session.ReaderContact)}).", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                     }

@@ -9,7 +9,7 @@ namespace LibraryBot.Data
         public DbSet<DbBorrowing> Borrowings { get; set; }
         public DbSet<DbPendingRequest> PendingRequests { get; set; }
         public DbSet<DbExchangeLog> ExchangeLogs { get; set; }
-
+        public DbSet<DbUser> Users { get; set; }
         static AppDbContext()
         {
             AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);

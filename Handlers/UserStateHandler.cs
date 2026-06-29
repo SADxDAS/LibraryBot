@@ -101,7 +101,12 @@ namespace LibraryBot.Handlers
             if (currentState == UserState.WaitingForBorrowContactMethod)
             {
                 var session = SessionManager.BorrowSessions[chatId];
+                if (!string.IsNullOrEmpty(session.RealName) && !string.IsNullOrEmpty(session.Contact))
+                {
+                    await LibraryDbService.SaveOrUpdateUserAsync(chatId, session.RealName, session.Contact);
+                }
 
+                SessionManager.UserStates[chatId] = UserState.WaitingForBorrowPeriod;
                 // Якщо людина відправила КОНТАКТ (натиснула "Поділитися номером")
                 if (message.Type == MessageType.Contact && message.Contact != null)
                 {

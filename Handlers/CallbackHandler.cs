@@ -37,29 +37,59 @@ namespace LibraryBot.Handlers
             else if (callbackQuery.Data.StartsWith("act_b_"))
             {
                 int bookId = int.Parse(callbackQuery.Data.Substring(6));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE
-                        ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
+                    int disponible = row.Count > LibraryDbService.COL_CATALOG_AVAILABLE
+                        ? int.TryParse(row[LibraryDbService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
                         : 0;
 
                     if (disponible <= 0)
                     {
-                        try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Всі примірники цієї книги вже взяті.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                        try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
+                        try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Всі примірники цієї книги вже взяті.", showAlert: true, cancellationToken: cancellationToken); } catch { }
                         return;
                     }
 
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
-                    SessionManager.BorrowSessions[chatId] = new UserBorrowingSession { BookTitle = title, CatalogRowIndex = bookId };
-                    SessionManager.UserStates[chatId] = UserState.WaitingForBorrowRealName;
+                    // НОВЕ: Перевіряємо, чи є у користувача збережений профіль
+                    var savedProfile = await LibraryDbService.GetUserAsync(chatId);
 
-                    try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                    await botClient.SendMessage(chatId, $"📖 Ви обрали книгу:\n<b>{title}</b>.\n\n👤 Будь ласка, введіть ваше **Справжнє Ім'я та Прізвище**:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    if (savedProfile != null)
+                    {
+                        // ПРОФІЛЬ Є: Пропускаємо введення імені та контакту, одразу питаємо термін
+                        SessionManager.BorrowSessions[chatId] = new UserBorrowingSession
+                        {
+                            BookTitle = title,
+                            CatalogRowIndex = bookId,
+                            RealName = savedProfile.RealName, // Беремо з БД
+                            Contact = savedProfile.Contact    // Беремо з БД
+                        };
+
+                        SessionManager.UserStates[chatId] = UserState.WaitingForBorrowPeriod;
+
+                        try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch { }
+
+                        var inlineKeyboard = new InlineKeyboardMarkup(new[]
+                        {
+                            new[] { InlineKeyboardButton.WithCallbackData("⏳ 2 тижні (14 днів)", "period_14") },
+                            new[] { InlineKeyboardButton.WithCallbackData("🗓 1 місяць (30 днів)", "period_30") },
+                            new[] { InlineKeyboardButton.WithCallbackData("📚 2 місяці (60 днів)", "period_60") }
+                        });
+
+                        await botClient.SendMessage(chatId, $"📖 Ви обрали книгу:\n<b>{TextUtils.EscapeHtml(title)}</b>.\n\n👤 Бот запам'ятав вас як: <b>{TextUtils.EscapeHtml(savedProfile.RealName)}</b>.\n\n👇 На який термін ви берете книгу?", parseMode: ParseMode.Html, replyMarkup: inlineKeyboard, cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        // ПРОФІЛЮ НЕМАЄ: Запитуємо ім'я (як раніше)
+                        SessionManager.BorrowSessions[chatId] = new UserBorrowingSession { BookTitle = title, CatalogRowIndex = bookId };
+                        SessionManager.UserStates[chatId] = UserState.WaitingForBorrowRealName;
+
+                        try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch { }
+                        await botClient.SendMessage(chatId, $"📖 Ви обрали книгу:\n<b>{TextUtils.EscapeHtml(title)}</b>.\n\n👤 Будь ласка, введіть ваше <b>Справжнє Ім'я та Прізвище</b>:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
                 }
             }
             else if (callbackQuery.Data.StartsWith("act_r_"))
@@ -69,18 +99,18 @@ namespace LibraryBot.Handlers
                 if (!string.IsNullOrEmpty(callbackQuery.Message.Chat.Username))
                     tgName += $" (@{callbackQuery.Message.Chat.Username})";
 
-                var userBooks = await GoogleSheetsService.GetUserBorrowedBooksAsync(chatId);
+                var userBooks = await LibraryDbService.GetUserBorrowedBooksAsync(chatId);
                 if (!userBooks.Any(b => b.BookId == bookId))
                 {
                     try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Ви не можете повернути цю книгу, бо вона записана не на вас.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     return;
                 }
 
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
                 if (row != null)
                 {
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     var request = new PendingRequest
                     {
@@ -91,7 +121,7 @@ namespace LibraryBot.Handlers
                         CatalogRowIndex = bookId
                     };
 
-                    await GoogleSheetsService.AddPendingRequestAsync(request);
+                    await LibraryDbService.AddPendingRequestAsync(request);
 
                     var adminKeyboard = new InlineKeyboardMarkup(new[]
                     {
@@ -120,7 +150,7 @@ namespace LibraryBot.Handlers
                 // Критична секція по запиту: два адміни (або подвійний тап) не оброблять його двічі.
                 using var reqLock = await AsyncKeyedLock.LockAsync($"request:{reqId}", cancellationToken);
 
-                var request = await GoogleSheetsService.GetPendingRequestAsync(reqId);
+                var request = await LibraryDbService.GetPendingRequestAsync(reqId);
                 if (request == null)
                 {
                     try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Цей запит вже був оброблений іншим адміном або скасований.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -147,17 +177,17 @@ namespace LibraryBot.Handlers
                         return;
                     }
 
-                    await GoogleSheetsService.DeletePendingRequestAsync(reqId);
+                    await LibraryDbService.DeletePendingRequestAsync(reqId);
 
                     if (request.Type == RequestType.Borrow)
                     {
                         // Критична секція по книзі + перевірка наявності В МОМЕНТ схвалення:
                         // поки запит чекав, примірники могли розібрати — тоді видачу не виконуємо.
                         using var bookLock = await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken);
-                        if (await GoogleSheetsService.TryDecrementAvailableAsync(request.CatalogRowIndex))
+                        if (await LibraryDbService.TryDecrementAvailableAsync(request.CatalogRowIndex))
                         {
                             DateTime dueDate = DateTime.Now.AddDays(request.BorrowDays);
-                            await GoogleSheetsService.AddBorrowingAsync(request.BookTitle, request.RealName, request.UserName, request.Contact ?? "", request.UserId, dueDate);
+                            await LibraryDbService.AddBorrowingAsync(request.BookTitle, request.RealName, request.UserName, request.Contact ?? "", request.UserId, dueDate);
                             await botClient.SendMessage(request.UserId, $"🎉 <b>Ваш запит схвалено!</b>\nКнигу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b> закріплено за вами.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                         }
                         else
@@ -169,8 +199,8 @@ namespace LibraryBot.Handlers
                     else if (request.Type == RequestType.Return)
                     {
                         using var bookLock = await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken);
-                        await GoogleSheetsService.ChangeAvailableCountAsync(request.CatalogRowIndex, 1);
-                        await GoogleSheetsService.LogReturnDateAsync(request.BookTitle, request.UserId);
+                        await LibraryDbService.ChangeAvailableCountAsync(request.CatalogRowIndex, 1);
+                        await LibraryDbService.LogReturnDateAsync(request.BookTitle, request.UserId);
                         await botClient.SendMessage(request.UserId, $"✅ <b>Повернення підтверджено!</b>\nДякуємо, що повернули книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b>.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     }
 
@@ -178,7 +208,7 @@ namespace LibraryBot.Handlers
                 }
                 else
                 {
-                    await GoogleSheetsService.DeletePendingRequestAsync(reqId);
+                    await LibraryDbService.DeletePendingRequestAsync(reqId);
 
                     string safeTitle = TextUtils.EscapeHtml(request.BookTitle);
                     string rejectMsg = request.Type == RequestType.UserExchange
@@ -204,23 +234,23 @@ namespace LibraryBot.Handlers
                 // Критична секція по запиту: один запит обробляється лише раз.
                 using var reqLock = await AsyncKeyedLock.LockAsync($"request:{reqId}", cancellationToken);
 
-                var request = await GoogleSheetsService.GetPendingRequestAsync(reqId);
+                var request = await LibraryDbService.GetPendingRequestAsync(reqId);
                 if (request == null)
                 {
                     try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Запит уже оброблено.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     return;
                 }
 
-                await GoogleSheetsService.DeletePendingRequestAsync(reqId);
+                await LibraryDbService.DeletePendingRequestAsync(reqId);
 
                 string exchangeStatus = canExchange ? "Так" : "Ні";
 
-                await GoogleSheetsService.AddBookToCatalogAsync(request.NewBookTitle, request.NewBookAuthor, request.NewBookGenre, exchangeStatus, 1);
+                await LibraryDbService.AddBookToCatalogAsync(request.NewBookTitle, request.NewBookAuthor, request.NewBookGenre, exchangeStatus, 1);
                 using (await AsyncKeyedLock.LockAsync($"book:{request.CatalogRowIndex}", cancellationToken))
                 {
-                    await GoogleSheetsService.ProcessExchangeOutgoingBookAsync(request.CatalogRowIndex, request.BookTitle);
+                    await LibraryDbService.ProcessExchangeOutgoingBookAsync(request.CatalogRowIndex, request.BookTitle);
                 }
-                await GoogleSheetsService.AddExchangeLogAsync(request.BookTitle, request.NewBookTitle, request.UserName);
+                await LibraryDbService.AddExchangeLogAsync(request.BookTitle, request.NewBookTitle, request.UserName);
 
                 await botClient.SendMessage(request.UserId, $"🎉 <b>Ваш запит на обмін схвалено!</b>\n\nВи можете забрати книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b>, а свою передати баристі. Дякуємо за обмін! 💚", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
 
@@ -236,13 +266,13 @@ namespace LibraryBot.Handlers
             else if (callbackQuery.Data.StartsWith("userex_sel_"))
             {
                 int bookId = int.Parse(callbackQuery.Data.Substring(11));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE
-                        ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
+                    int disponible = row.Count > LibraryDbService.COL_CATALOG_AVAILABLE
+                        ? int.TryParse(row[LibraryDbService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0
                         : 0;
 
                     if (disponible <= 0)
@@ -251,7 +281,7 @@ namespace LibraryBot.Handlers
                         return;
                     }
 
-                    string libBookTitle = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string libBookTitle = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
                     if (!SessionManager.UserExchangeSessions.TryGetValue(chatId, out var session))
                     {
                         try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Сесію обміну вже завершено або застаріло. Почніть заново.", showAlert: true, cancellationToken: cancellationToken); } catch { }
@@ -275,7 +305,7 @@ namespace LibraryBot.Handlers
                         NewBookGenre = session.Genre
                     };
 
-                    await GoogleSheetsService.AddPendingRequestAsync(request);
+                    await LibraryDbService.AddPendingRequestAsync(request);
 
                     var adminKeyboard = new InlineKeyboardMarkup(new[]
                     {
@@ -302,7 +332,7 @@ namespace LibraryBot.Handlers
             else if (callbackQuery.Data.StartsWith("act_ext_"))
             {
                 int rowIndex = int.Parse(callbackQuery.Data.Substring(8));
-                bool success = await GoogleSheetsService.ExtendBorrowingAsync(rowIndex);
+                bool success = await LibraryDbService.ExtendBorrowingAsync(rowIndex);
 
                 if (success)
                 {
@@ -318,12 +348,12 @@ namespace LibraryBot.Handlers
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 int bookId = int.Parse(callbackQuery.Data.Substring(8));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "Невідома книга";
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "Невідома книга";
                     var confirmKeyboard = new InlineKeyboardMarkup(new[]
                     {
                         new InlineKeyboardButton[] { InlineKeyboardButton.WithCallbackData("✅ Так, видалити", $"conf_del_{bookId}"), InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"canc_del_{bookId}") }
@@ -336,22 +366,22 @@ namespace LibraryBot.Handlers
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 int bookId = int.Parse(callbackQuery.Data.Substring(9));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     // Не даємо списати книгу, якщо її примірники ще на руках у читачів.
-                    int onLoan = await GoogleSheetsService.CountActiveBorrowingsAsync(title);
+                    int onLoan = await LibraryDbService.CountActiveBorrowingsAsync(title);
                     if (onLoan > 0)
                     {
                         await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"🚫 Не можна списати книгу <b>{TextUtils.EscapeHtml(title)}</b>: {onLoan} прим. зараз на руках у читачів.\nСпочатку дочекайтеся повернення всіх примірників.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                         return;
                     }
 
-                    bool deleted = await GoogleSheetsService.DeleteBookByIdAsync(bookId);
+                    bool deleted = await LibraryDbService.DeleteBookByIdAsync(bookId);
                     if (deleted)
                         await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{TextUtils.EscapeHtml(title)}</b> успішно видалено з каталогу.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     else
@@ -368,18 +398,18 @@ namespace LibraryBot.Handlers
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 int bookId = int.Parse(callbackQuery.Data.Substring(9));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    string oldTitle = row.Count > GoogleSheetsService.COL_CATALOG_TITLE ? row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "" : "";
-                    string oldAuthor = row.Count > GoogleSheetsService.COL_CATALOG_AUTHOR ? row[GoogleSheetsService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
-                    string oldGenre = row.Count > GoogleSheetsService.COL_CATALOG_GENRE ? row[GoogleSheetsService.COL_CATALOG_GENRE]?.ToString() ?? "" : "";
-                    string oldExchange = row.Count > GoogleSheetsService.COL_CATALOG_EXCHANGE ? row[GoogleSheetsService.COL_CATALOG_EXCHANGE]?.ToString()?.Trim() ?? "Так" : "Так";
+                    string oldTitle = row.Count > LibraryDbService.COL_CATALOG_TITLE ? row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "" : "";
+                    string oldAuthor = row.Count > LibraryDbService.COL_CATALOG_AUTHOR ? row[LibraryDbService.COL_CATALOG_AUTHOR]?.ToString() ?? "" : "";
+                    string oldGenre = row.Count > LibraryDbService.COL_CATALOG_GENRE ? row[LibraryDbService.COL_CATALOG_GENRE]?.ToString() ?? "" : "";
+                    string oldExchange = row.Count > LibraryDbService.COL_CATALOG_EXCHANGE ? row[LibraryDbService.COL_CATALOG_EXCHANGE]?.ToString()?.Trim() ?? "Так" : "Так";
 
-                    int oldAvailable = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int ava) ? ava : 0 : 0;
-                    int oldTotal = row.Count > GoogleSheetsService.COL_CATALOG_TOTAL ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_TOTAL]?.ToString(), out int tot) ? tot : 1 : 1;
+                    int oldAvailable = row.Count > LibraryDbService.COL_CATALOG_AVAILABLE ? int.TryParse(row[LibraryDbService.COL_CATALOG_AVAILABLE]?.ToString(), out int ava) ? ava : 0 : 0;
+                    int oldTotal = row.Count > LibraryDbService.COL_CATALOG_TOTAL ? int.TryParse(row[LibraryDbService.COL_CATALOG_TOTAL]?.ToString(), out int tot) ? tot : 1 : 1;
 
                     SessionManager.AdminBookSessions[chatId] = new AdminBookSession
                     {
@@ -402,12 +432,12 @@ namespace LibraryBot.Handlers
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 int bookId = int.Parse(callbackQuery.Data.Substring(9));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
+                    int disponible = row.Count > LibraryDbService.COL_CATALOG_AVAILABLE ? int.TryParse(row[LibraryDbService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
                     if (disponible <= 0)
                     {
                         try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "❌ Всі примірники цієї книги зараз на руках. Обмін неможливий.", showAlert: true, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -415,7 +445,7 @@ namespace LibraryBot.Handlers
                         return;
                     }
 
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     SessionManager.AdminExchangeSessions[chatId] = new AdminExchangeSession { OldBookRowIndex = bookId, OldBookTitle = title };
                     SessionManager.UserStates[chatId] = UserState.WaitingForExchangeReaderName;
@@ -428,7 +458,7 @@ namespace LibraryBot.Handlers
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
-                var overdueList = await GoogleSheetsService.GetOverdueBorrowingsAsync();
+                var overdueList = await LibraryDbService.GetOverdueBorrowingsAsync();
 
                 if (overdueList.Count == 0)
                 {
@@ -466,7 +496,7 @@ namespace LibraryBot.Handlers
 
                 int page = int.Parse(callbackQuery.Data.Replace("borrow_page_", ""));
 
-                var activeList = await GoogleSheetsService.GetActiveBorrowingsAsync();
+                var activeList = await LibraryDbService.GetActiveBorrowingsAsync();
                 if (activeList.Count == 0) return;
 
                 int pageSize = 10;
@@ -505,13 +535,13 @@ namespace LibraryBot.Handlers
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 int bookId = int.Parse(callbackQuery.Data.Substring(10));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
-                    int disponible = row.Count > GoogleSheetsService.COL_CATALOG_AVAILABLE ? int.TryParse(row[GoogleSheetsService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    int disponible = row.Count > LibraryDbService.COL_CATALOG_AVAILABLE ? int.TryParse(row[LibraryDbService.COL_CATALOG_AVAILABLE]?.ToString(), out int d) ? d : 0 : 0;
 
                     if (disponible <= 0)
                     {
@@ -532,17 +562,17 @@ namespace LibraryBot.Handlers
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
 
                 int bookId = int.Parse(callbackQuery.Data.Substring(10));
-                var books = await GoogleSheetsService.GetBooksAsync();
+                var books = await LibraryDbService.GetBooksAsync();
                 var row = FindBookById(books, bookId);
 
                 if (row != null)
                 {
-                    string title = row[GoogleSheetsService.COL_CATALOG_TITLE]?.ToString() ?? "";
+                    string title = row[LibraryDbService.COL_CATALOG_TITLE]?.ToString() ?? "";
 
                     using (await AsyncKeyedLock.LockAsync($"book:{bookId}", cancellationToken))
                     {
-                        await GoogleSheetsService.ChangeAvailableCountAsync(bookId, 1);
-                        await GoogleSheetsService.LogReturnDateAsync(title);
+                        await LibraryDbService.ChangeAvailableCountAsync(bookId, 1);
+                        await LibraryDbService.LogReturnDateAsync(title);
                     }
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -577,7 +607,7 @@ namespace LibraryBot.Handlers
                     BorrowDays = days
                 };
 
-                await GoogleSheetsService.AddPendingRequestAsync(request);
+                await LibraryDbService.AddPendingRequestAsync(request);
 
                 var adminKeyboard = new InlineKeyboardMarkup(new[]
                 {
@@ -607,7 +637,7 @@ namespace LibraryBot.Handlers
         /// </summary>
         private static IList<object>? FindBookById(IList<IList<object>>? books, int bookId)
             => books?.FirstOrDefault(b =>
-                b.Count > GoogleSheetsService.COL_CATALOG_ID
-                && System.Convert.ToInt32(b[GoogleSheetsService.COL_CATALOG_ID]) == bookId);
+                b.Count > LibraryDbService.COL_CATALOG_ID
+                && System.Convert.ToInt32(b[LibraryDbService.COL_CATALOG_ID]) == bookId);
     }
 }
