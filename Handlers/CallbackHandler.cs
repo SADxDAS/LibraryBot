@@ -546,6 +546,112 @@ namespace LibraryBot.Handlers
 
                 await botClient.SendMessage(chatId, "✍️ Введіть ваше нове <b>Справжнє Ім'я та Прізвище</b>:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
             }
+            // -------------------------------------------------------------
+            // ОБРОБКА ІНТЕРАКТИВНОГО МАЙСТРА ДОДАВАННЯ/РЕДАГУВАННЯ КНИГИ
+            // -------------------------------------------------------------
+            else if (callbackQuery.Data.StartsWith("wizard_"))
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+                if (!SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Сесія застаріла. Почніть спочатку.", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+
+                string action = callbackQuery.Data;
+
+                if (action == "wizard_cancel")
+                {
+                    SessionManager.ClearSession(chatId);
+                    try { await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Додавання книги скасовано.", cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+                else if (action == "wizard_next")
+                {
+                    if (session.CurrentStep == 1 && string.IsNullOrWhiteSpace(session.Title))
+                    {
+                        try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Спочатку введіть назву книги!", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                        return;
+                    }
+                    if (session.CurrentStep < 5) session.CurrentStep++;
+                }
+                else if (action == "wizard_prev")
+                {
+                    if (session.CurrentStep > 1) session.CurrentStep--;
+                }
+                else if (action == "wizard_skip")
+                {
+                    if (session.CurrentStep == 2) session.Author = "-";
+                    if (session.CurrentStep == 3) session.Genre = "-";
+                    if (session.CurrentStep < 5) session.CurrentStep++;
+                }
+                else if (action == "wizard_qty_minus")
+                {
+                    if (session.CurrentAvailable > 1)
+                    {
+                        session.CurrentAvailable--;
+                        session.CurrentTotal--;
+                    }
+                }
+                else if (action == "wizard_qty_plus")
+                {
+                    session.CurrentAvailable++;
+                    session.CurrentTotal++;
+                }
+                else if (action == "wizard_qty_manual")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookQuantity;
+                }
+                else if (action == "wizard_exch_toggle")
+                {
+                    session.ExchangeStatus = session.ExchangeStatus == "Так" ? "Ні" : "Так";
+                }
+                else if (action == "wizard_save")
+                {
+                    string safeTitle = TextUtils.EscapeHtml(session.Title ?? "Без назви");
+
+                    // ВИПРАВЛЕНО: Тепер ми перевіряємо <= 0, що покриває і 0, і -1
+                    if (session.EditRowIndex <= 0)
+                    {
+                        bool success = await LibraryDbService.AddBookToCatalogAsync(
+                            session.Title ?? "Без назви",
+                            session.Author ?? "Невідомий",
+                            session.Genre ?? "Не вказано",
+                            session.ExchangeStatus ?? "Так",
+                            session.CurrentAvailable);
+
+                        if (success)
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{safeTitle}</b> успішно додано до каталогу!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        else
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Помилка бази даних. Книгу не додано.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
+                    else // Це редагування існуючої (ID > 0)
+                    {
+                        bool success = await LibraryDbService.UpdateBookInCatalogAsync(
+                            session.EditRowIndex,
+                            session.Title ?? "Без назви",
+                            session.Author ?? "Невідомий",
+                            session.Genre ?? "Не вказано",
+                            session.ExchangeStatus ?? "Так",
+                            session.CurrentAvailable,
+                            session.CurrentTotal);
+
+                        if (success)
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{safeTitle}</b> успішно оновлено!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        else
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Книгу з ID {session.EditRowIndex} не знайдено в базі.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
+
+                    SessionManager.ClearSession(chatId);
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "✅ Збережено!", cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+                try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
+
+                // Після будь-якої кнопки — оновлюємо інтерфейс майстра
+                await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, callbackQuery.Message.MessageId, cancellationToken);
+                return;
+            }
             else if (callbackQuery.Data.StartsWith("act_man_b_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;

@@ -88,10 +88,13 @@
         public string? Title { get; set; }
         public string? Author { get; set; }
         public string? Genre { get; set; }
-        public string? ExchangeStatus { get; set; } // "Так" або "Ні"
+        public string? ExchangeStatus { get; set; } = "Так";// "Так" або "Ні"
         public int Quantity { get; set; }
-        public int CurrentAvailable { get; set; } // <--- ДОДАЙ ЦЕ
-        public int CurrentTotal { get; set; }
+        public int CurrentAvailable { get; set; } = 1; // <--- ДОДАЙ ЦЕ
+        public int CurrentTotal { get; set; } = 1;
+        // НОВІ ПОЛЯ ДЛЯ ІНТЕРАКТИВНОГО МАЙСТРА
+        public int CurrentStep { get; set; } = 1;
+        public int WizardMessageId { get; set; } = 0;
     }
     public class AdminExchangeSession
     {
