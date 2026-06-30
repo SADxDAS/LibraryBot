@@ -14,7 +14,7 @@ namespace LibraryBot.Handlers
 {
     public static class AdminStateHandler
     {
-        public static async Task<bool> HandleAsync(ITelegramBotClient botClient, long chatId, string text, UserState state, CancellationToken cancellationToken, Message message = null)
+        public static async Task<bool> HandleAsync(ITelegramBotClient botClient, long chatId, string text, UserState state, CancellationToken cancellationToken, Telegram.Bot.Types.Message? message = null)
         {
             if (!string.IsNullOrEmpty(text) && (text.ToLower() == "/cancel" || text == "❌ Скасувати дію" || text == "❌ Скасувати"))
             {
@@ -261,7 +261,28 @@ namespace LibraryBot.Handlers
                 return true;
             }
 
-            if (state == UserState.WaitingForEditBookGenre)
+            // --- ПОВЕРНУТИЙ БЛОК: Обробка ручного введення кількості в Мастері ---
+            if (state == UserState.WaitingForAddBookQuantity)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (int.TryParse(text, out int qty) && qty > 0)
+                    {
+                        session.CurrentAvailable = qty;
+                        session.CurrentTotal = qty;
+                        SessionManager.UserStates[chatId] = UserState.None;
+                        // Підтвердження змін: оновлюємо інтерфейс або показуємо повідомлення адміну
+                        await botClient.SendMessage(chatId, $"✅ Кількість встановлено: {qty} шт.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        var msg = await botClient.SendMessage(chatId, "❌ Введіть коректне число (більше нуля).", cancellationToken: cancellationToken);
+                        _ = Task.Run(async () => { await Task.Delay(3000); try { await botClient.DeleteMessage(chatId, msg.MessageId, CancellationToken.None); } catch { } });
+                    }
+                }
+                return true;
+            }
+            if (state == UserState.WaitingForAddBookQuantity)
             {
                 if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
                 {
