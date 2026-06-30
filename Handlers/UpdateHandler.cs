@@ -98,7 +98,20 @@ namespace LibraryBot.Handlers
             if (userId is not long uid) return null;
 
             if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } data)
+            {
+                // ВИПРАВЛЕННЯ: Дозволяємо швидке натискання (спам) для кнопок кількості та сторінок
+                if (data.StartsWith("wizard_qty_") || 
+                    data.StartsWith("edit_menu_qty") || 
+                    data == "wizard_next" || 
+                    data == "wizard_prev" ||
+                    data.StartsWith("page_") ||
+                    data.StartsWith("borrow_page_"))
+                {
+                    return null; // Відключаємо блокування для цих кнопок
+                }
+
                 return $"cb:{uid}:{data}";
+            }
 
             if (update.Message?.Text is { } txt && !string.IsNullOrWhiteSpace(txt))
                 return $"msg:{uid}:{txt.Trim()}";
@@ -191,7 +204,7 @@ namespace LibraryBot.Handlers
 
             if (currentState != UserState.None && SessionManager.AdminIds.Contains(chatId))
             {
-                if (await AdminStateHandler.HandleAsync(botClient, chatId, messageText, currentState, cancellationToken)) return;
+                if (await AdminStateHandler.HandleAsync(botClient, chatId, messageText, currentState, cancellationToken, message)) return;
             }
 
             if (currentState != UserState.None)
