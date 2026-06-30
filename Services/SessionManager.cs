@@ -26,6 +26,7 @@ namespace LibraryBot.Services
 
         public static readonly ConcurrentDictionary<long, AdminBookSession> AdminBookSessions = new();
         public static readonly ConcurrentDictionary<string, PendingRequest> PendingRequests = new();
+        public static readonly ConcurrentDictionary<string, List<(long AdminChatId, int MessageId)>> AdminRequestMessages = new();
         public static readonly ConcurrentDictionary<long, UserState> UserStates = new();
         public static readonly ConcurrentDictionary<long, ManualBorrowingSession> AdminSessions = new();
         public static readonly ConcurrentDictionary<long, UserBorrowingSession> BorrowSessions = new();

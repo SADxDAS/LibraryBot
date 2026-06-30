@@ -130,11 +130,17 @@ namespace LibraryBot.Handlers
                     });
 
                     string adminMsg = $"📥 <b>ЗАПИТ НА ПОВЕРНЕННЯ</b>\n\n👤 Читач: {TextUtils.EscapeHtml(tgName)}\n📖 Книга: <b>{TextUtils.EscapeHtml(title)}</b>";
+                    var msgList = new List<(long, int)>();
                     foreach (var adminId in SessionManager.AdminIds)
                     {
-                        try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
+                        try 
+                        { 
+                            var msg = await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); 
+                            msgList.Add((adminId, msg.MessageId));
+                        }
                         catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                     }
+                    SessionManager.AdminRequestMessages[request.RequestId] = msgList; // ЗБЕРІГАЄМО
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     await botClient.SendMessage(chatId, $"⏳ Запит на повернення книги '<b>{title}</b>' відправлено. Дочекайтеся підтвердження.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
@@ -173,7 +179,7 @@ namespace LibraryBot.Handlers
                             }
                         });
 
-                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", parseMode: ParseMode.Html, replyMarkup: choiceKeyboard, cancellationToken: cancellationToken);
+                        await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", choiceKeyboard);
                         return;
                     }
 
@@ -204,7 +210,8 @@ namespace LibraryBot.Handlers
                         await botClient.SendMessage(request.UserId, $"✅ <b>Повернення підтверджено!</b>\nДякуємо, що повернули книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b>.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     }
 
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n✅ <b>СХВАЛЕНО</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + "\n\n✅ <b>СХВАЛЕНО</b>");
+                    SessionManager.AdminRequestMessages.TryRemove(reqId, out _); // Очищуємо пам'ять
                 }
                 else
                 {
@@ -218,7 +225,8 @@ namespace LibraryBot.Handlers
                             : $"❌ Ваш запит на повернення книги\n{safeTitle}\nвідхилено.");
 
                     await botClient.SendMessage(request.UserId, rejectMsg, parseMode: ParseMode.Html, cancellationToken: cancellationToken);
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n❌ <b>ВІДХИЛЕНО</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + "\n\n❌ <b>ВІДХИЛЕНО</b>");
+                    SessionManager.AdminRequestMessages.TryRemove(reqId, out _); // Очищуємо пам'ять
                 }
             }
             // ФІКС ТУТ: Розумне вирахування довжини текстового тригера кнопки статусу
@@ -261,7 +269,8 @@ namespace LibraryBot.Handlers
                 }
 
                 string finalStatusText = canExchange ? "СХВАЛЕНО (З можливістю обміну)" : "СХВАЛЕНО (Без подальшого обміну)";
-                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + $"\n\n✅ <b>{finalStatusText}</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + $"\n\n✅ <b>{finalStatusText}</b>");
+                SessionManager.AdminRequestMessages.TryRemove(reqId, out _); // Очищуємо пам'ять
             }
             else if (callbackQuery.Data.StartsWith("userex_sel_"))
             {
@@ -318,11 +327,18 @@ namespace LibraryBot.Handlers
                                       $"📥 <b>Принесе в бібліотеку:</b>\n📖 «{TextUtils.EscapeHtml(session.Title)}» ({TextUtils.EscapeHtml(session.Author)} / Жанр: {TextUtils.EscapeHtml(session.Genre)})\n\n" +
                                       $"📤 <b>Хоче забрати натомість:</b>\n📖 «{TextUtils.EscapeHtml(libBookTitle)}»";
 
+                    var msgList = new List<(long, int)>();
                     foreach (var adminId in SessionManager.AdminIds)
                     {
-                        try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
+                        try 
+                        { 
+                            var msg = await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); 
+                            msgList.Add((adminId, msg.MessageId));
+                        }
                         catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                     }
+
+                    SessionManager.AdminRequestMessages[request.RequestId] = msgList; // ЗБЕРІГАЄМО
 
                     SessionManager.ClearSession(chatId);
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -827,11 +843,17 @@ namespace LibraryBot.Handlers
                 });
 
                 string adminMsg = $"📩 <b>НОВИЙ ЗАПИТ НА ВИДАЧУ</b>\n\n👤 Читач: <b>{TextUtils.EscapeHtml(realName)}</b>\n🔗 Профіль: {TextUtils.EscapeHtml(telegramName)}\n📞 Контакт: {TextUtils.EscapeHtml(contact)}\n📖 Книга: <b>{TextUtils.EscapeHtml(bookTitle)}</b>\n⏳ Термін: {days} днів";
+                var msgList = new List<(long, int)>();
                 foreach (var adminId in SessionManager.AdminIds)
                 {
-                    try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
+                    try 
+                    { 
+                        var msg = await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); 
+                        msgList.Add((adminId, msg.MessageId));
+                    }
                     catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                 }
+                SessionManager.AdminRequestMessages[request.RequestId] = msgList; // ЗБЕРІГАЄМО
 
                 SessionManager.ClearSession(chatId);
                 await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⏳ Запит на книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b> (на {days} днів) відправлено. Очікуйте!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
@@ -906,7 +928,20 @@ namespace LibraryBot.Handlers
             try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); }
             catch (Exception ex) { Console.WriteLine($"[Telegram API] Помилка AnswerCallbackQuery: {ex.Message}"); }
         }
-
+        /// <summary>
+        /// Оновлює повідомлення у всіх адміністраторів одночасно (щоб усі бачили однаковий статус запиту)
+        /// </summary>
+        private static async Task UpdateAllAdminMessages(ITelegramBotClient botClient, string reqId, string newText, InlineKeyboardMarkup? keyboard = null)
+        {
+            if (SessionManager.AdminRequestMessages.TryGetValue(reqId, out var msgList))
+            {
+                foreach (var (aId, mId) in msgList)
+                {
+                    try { await botClient.EditMessageText(aId, mId, newText, parseMode: ParseMode.Html, replyMarkup: keyboard); }
+                    catch { /* Ігноруємо, якщо адмін видалив повідомлення */ }
+                }
+            }
+        }
         /// <summary>
         /// Знаходить рядок книги за стабільним Id (DbBook.Id), а не за позицією в каталозі.
         /// Так дія завжди потрапляє в потрібну книгу, навіть якщо каталог змінився між
