@@ -20,8 +20,9 @@ namespace LibraryBot.UI
             {
                 new KeyboardButton[] { "📚 Каталог", "🔍 Пошук" },
                 new KeyboardButton[] { "📥 Взяти книгу", "📤 Повернути книгу" },
-                new KeyboardButton[] { "👤 Мій профіль" },
-                new KeyboardButton[] { "ℹ️ Допомога", "❌ Скасувати дію" }
+                new KeyboardButton[] { "ℹ️ Допомога", "👤 Мій профіль"  },
+                new KeyboardButton[] {"❌ Скасувати дію"  }
+
             })
             {
                 ResizeKeyboard = true

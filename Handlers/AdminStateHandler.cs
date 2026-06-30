@@ -19,7 +19,10 @@ namespace LibraryBot.Handlers
             if (!string.IsNullOrEmpty(text) && (text.ToLower() == "/cancel" || text == "❌ Скасувати дію" || text == "❌ Скасувати"))
             {
                 SessionManager.ClearSession(chatId);
-                await botClient.SendMessage(chatId, "Дію скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                // Убираем клавиатуру и помечаем действие как обработанное
+                await botClient.SendMessage(chatId, "ОБРОБЛЕНО\nДію скасовано.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                // Показываем главное меню
+                await botClient.SendMessage(chatId, "Меню:", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 return true;
             }
 
