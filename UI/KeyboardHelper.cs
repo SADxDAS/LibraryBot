@@ -13,15 +13,16 @@ namespace LibraryBot.UI
 
             return GetUserMenu();
         }
-
+        //"🤝 Обміняти",
         private static ReplyKeyboardMarkup GetUserMenu()
         {
             return new ReplyKeyboardMarkup(new[]
             {
                 new KeyboardButton[] { "📚 Каталог", "🔍 Пошук" },
                 new KeyboardButton[] { "📥 Взяти книгу", "📤 Повернути книгу" },
-                new KeyboardButton[] { "🤝 Обміняти","👤 Мій профіль" },
-                new KeyboardButton[] { "ℹ️ Допомога", "❌ Скасувати дію" }
+                new KeyboardButton[] { "ℹ️ Допомога", "👤 Мій профіль"  },
+                new KeyboardButton[] {"❌ Скасувати дію"  }
+
             })
             {
                 ResizeKeyboard = true
@@ -31,11 +32,10 @@ namespace LibraryBot.UI
         {
             return new ReplyKeyboardMarkup(new[]
             {
-                new KeyboardButton[] { "📚 Каталог", "🔍 Пошук" },
+                new KeyboardButton[] { "📚 Каталог", "📋 Список видач","🤝 Обмін" },
                 new KeyboardButton[] { "➕ Додати", "✏️ Редагувати", "🗑 Видалити" },
                 new KeyboardButton[] { "📥 Видати вручну", "📤 Повернути вручну" },
-                new KeyboardButton[] { "📊 Статистика","🤝 Обмін"},
-                new KeyboardButton[] { "📋 Список видач","❌ Скасувати дію" },
+                new KeyboardButton[] { "📊 Статистика", "❌ Скасувати дію"}
             })
             {
                 ResizeKeyboard = true

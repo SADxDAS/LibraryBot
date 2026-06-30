@@ -130,11 +130,17 @@ namespace LibraryBot.Handlers
                     });
 
                     string adminMsg = $"📥 <b>ЗАПИТ НА ПОВЕРНЕННЯ</b>\n\n👤 Читач: {TextUtils.EscapeHtml(tgName)}\n📖 Книга: <b>{TextUtils.EscapeHtml(title)}</b>";
+                    var msgList = new List<(long, int)>();
                     foreach (var adminId in SessionManager.AdminIds)
                     {
-                        try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
+                        try 
+                        { 
+                            var msg = await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); 
+                            msgList.Add((adminId, msg.MessageId));
+                        }
                         catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                     }
+                    SessionManager.AdminRequestMessages[request.RequestId] = msgList; // ЗБЕРІГАЄМО
 
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     await botClient.SendMessage(chatId, $"⏳ Запит на повернення книги '<b>{title}</b>' відправлено. Дочекайтеся підтвердження.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
@@ -173,7 +179,7 @@ namespace LibraryBot.Handlers
                             }
                         });
 
-                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", parseMode: ParseMode.Html, replyMarkup: choiceKeyboard, cancellationToken: cancellationToken);
+                        await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + "\n\n🔄 <b>Визначте статус обміну для цієї нової книги:</b>", choiceKeyboard);
                         return;
                     }
 
@@ -204,7 +210,8 @@ namespace LibraryBot.Handlers
                         await botClient.SendMessage(request.UserId, $"✅ <b>Повернення підтверджено!</b>\nДякуємо, що повернули книгу <b>{TextUtils.EscapeHtml(request.BookTitle)}</b>.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                     }
 
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n✅ <b>СХВАЛЕНО</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + "\n\n✅ <b>СХВАЛЕНО</b>");
+                    SessionManager.AdminRequestMessages.TryRemove(reqId, out _); // Очищуємо пам'ять
                 }
                 else
                 {
@@ -218,7 +225,8 @@ namespace LibraryBot.Handlers
                             : $"❌ Ваш запит на повернення книги\n{safeTitle}\nвідхилено.");
 
                     await botClient.SendMessage(request.UserId, rejectMsg, parseMode: ParseMode.Html, cancellationToken: cancellationToken);
-                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + "\n\n❌ <b>ВІДХИЛЕНО</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + "\n\n❌ <b>ВІДХИЛЕНО</b>");
+                    SessionManager.AdminRequestMessages.TryRemove(reqId, out _); // Очищуємо пам'ять
                 }
             }
             // ФІКС ТУТ: Розумне вирахування довжини текстового тригера кнопки статусу
@@ -261,7 +269,8 @@ namespace LibraryBot.Handlers
                 }
 
                 string finalStatusText = canExchange ? "СХВАЛЕНО (З можливістю обміну)" : "СХВАЛЕНО (Без подальшого обміну)";
-                await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, TextUtils.EscapeHtml(originalText) + $"\n\n✅ <b>{finalStatusText}</b>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                await UpdateAllAdminMessages(botClient, reqId, TextUtils.EscapeHtml(originalText) + $"\n\n✅ <b>{finalStatusText}</b>");
+                SessionManager.AdminRequestMessages.TryRemove(reqId, out _); // Очищуємо пам'ять
             }
             else if (callbackQuery.Data.StartsWith("userex_sel_"))
             {
@@ -318,11 +327,18 @@ namespace LibraryBot.Handlers
                                       $"📥 <b>Принесе в бібліотеку:</b>\n📖 «{TextUtils.EscapeHtml(session.Title)}» ({TextUtils.EscapeHtml(session.Author)} / Жанр: {TextUtils.EscapeHtml(session.Genre)})\n\n" +
                                       $"📤 <b>Хоче забрати натомість:</b>\n📖 «{TextUtils.EscapeHtml(libBookTitle)}»";
 
+                    var msgList = new List<(long, int)>();
                     foreach (var adminId in SessionManager.AdminIds)
                     {
-                        try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
+                        try 
+                        { 
+                            var msg = await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); 
+                            msgList.Add((adminId, msg.MessageId));
+                        }
                         catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                     }
+
+                    SessionManager.AdminRequestMessages[request.RequestId] = msgList; // ЗБЕРІГАЄМО
 
                     SessionManager.ClearSession(chatId);
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
@@ -422,9 +438,11 @@ namespace LibraryBot.Handlers
                         CurrentTotal = oldTotal
                     };
 
-                    SessionManager.UserStates[chatId] = UserState.WaitingForEditBookTitle;
+                    SessionManager.UserStates[chatId] = UserState.None;
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
-                    await botClient.SendMessage(chatId, $"✏️ Редагуємо книгу: <b>{TextUtils.EscapeHtml(oldTitle)}</b>\n\nВведіть НОВУ НАЗВУ (або відправте <code>-</code> щоб залишити без змін):", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+
+                    var session = SessionManager.AdminBookSessions[chatId];
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, null, cancellationToken);
                 }
             }
             else if (callbackQuery.Data.StartsWith("act_exch_"))
@@ -546,6 +564,112 @@ namespace LibraryBot.Handlers
 
                 await botClient.SendMessage(chatId, "✍️ Введіть ваше нове <b>Справжнє Ім'я та Прізвище</b>:", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
             }
+            // -------------------------------------------------------------
+            // ОБРОБКА ІНТЕРАКТИВНОГО МАЙСТРА ДОДАВАННЯ/РЕДАГУВАННЯ КНИГИ
+            // -------------------------------------------------------------
+            else if (callbackQuery.Data.StartsWith("wizard_"))
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+                if (!SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Сесія застаріла. Почніть спочатку.", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+
+                string action = callbackQuery.Data;
+
+                if (action == "wizard_cancel")
+                {
+                    SessionManager.ClearSession(chatId);
+                    try { await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Додавання книги скасовано.", cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+                else if (action == "wizard_next")
+                {
+                    if (session.CurrentStep == 1 && string.IsNullOrWhiteSpace(session.Title))
+                    {
+                        try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Спочатку введіть назву книги!", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                        return;
+                    }
+                    if (session.CurrentStep < 5) session.CurrentStep++;
+                }
+                else if (action == "wizard_prev")
+                {
+                    if (session.CurrentStep > 1) session.CurrentStep--;
+                }
+                else if (action == "wizard_skip")
+                {
+                    if (session.CurrentStep == 2) session.Author = "-";
+                    if (session.CurrentStep == 3) session.Genre = "-";
+                    if (session.CurrentStep < 5) session.CurrentStep++;
+                }
+                else if (action == "wizard_qty_minus")
+                {
+                    if (session.CurrentAvailable > 1)
+                    {
+                        session.CurrentAvailable--;
+                        session.CurrentTotal--;
+                    }
+                }
+                else if (action == "wizard_qty_plus")
+                {
+                    session.CurrentAvailable++;
+                    session.CurrentTotal++;
+                }
+                else if (action == "wizard_qty_manual")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookQuantity;
+                }
+                else if (action == "wizard_exch_toggle")
+                {
+                    session.ExchangeStatus = session.ExchangeStatus == "Так" ? "Ні" : "Так";
+                }
+                else if (action == "wizard_save")
+                {
+                    string safeTitle = TextUtils.EscapeHtml(session.Title ?? "Без назви");
+
+                    // ВИПРАВЛЕНО: Тепер ми перевіряємо <= 0, що покриває і 0, і -1
+                    if (session.EditRowIndex <= 0)
+                    {
+                        bool success = await LibraryDbService.AddBookToCatalogAsync(
+                            session.Title ?? "Без назви",
+                            session.Author ?? "Невідомий",
+                            session.Genre ?? "Не вказано",
+                            session.ExchangeStatus ?? "Так",
+                            session.CurrentAvailable);
+
+                        if (success)
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{safeTitle}</b> успішно додано до каталогу!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        else
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Помилка бази даних. Книгу не додано.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
+                    else // Це редагування існуючої (ID > 0)
+                    {
+                        bool success = await LibraryDbService.UpdateBookInCatalogAsync(
+                            session.EditRowIndex,
+                            session.Title ?? "Без назви",
+                            session.Author ?? "Невідомий",
+                            session.Genre ?? "Не вказано",
+                            session.ExchangeStatus ?? "Так",
+                            session.CurrentAvailable,
+                            session.CurrentTotal);
+
+                        if (success)
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{safeTitle}</b> успішно оновлено!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        else
+                            await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Книгу з ID {session.EditRowIndex} не знайдено в базі.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
+
+                    SessionManager.ClearSession(chatId);
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "✅ Збережено!", cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+                try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
+
+                // Після будь-якої кнопки — оновлюємо інтерфейс майстра
+                await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, callbackQuery.Message.MessageId, cancellationToken);
+                return;
+            }
             else if (callbackQuery.Data.StartsWith("act_man_b_"))
             {
                 if (!SessionManager.AdminIds.Contains(chatId)) return;
@@ -594,6 +718,72 @@ namespace LibraryBot.Handlers
                     try { await botClient.EditMessageReplyMarkup(chatId, callbackQuery.Message.MessageId, replyMarkup: null, cancellationToken: cancellationToken); } catch (Exception ex) { Console.WriteLine($"[Telegram API] {ex.Message}"); }
                     await botClient.SendMessage(chatId, $"✅ Книгу '<b>{title}</b>' успішно повернуто вручну від офлайн-користувача! Статус оновлено.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
                 }
+            }
+            // -------------------------------------------------------------
+            // ОБРОБКА КНОПОК ПАНЕЛІ РЕДАГУВАННЯ КНИГИ
+            // -------------------------------------------------------------
+            else if (callbackQuery.Data.StartsWith("edit_menu_"))
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+                if (!SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    try { await botClient.AnswerCallbackQuery(callbackQuery.Id, "⚠️ Сесія застаріла.", showAlert: true, cancellationToken: cancellationToken); } catch { }
+                    return;
+                }
+
+                string action = callbackQuery.Data;
+
+                if (action == "edit_menu_title")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditBookTitle;
+                    await botClient.SendMessage(chatId, $"✍️ Введіть НОВУ НАЗВУ:\n💡 <i>Поточна:</i> <code>{TextUtils.EscapeHtml(session.Title)}</code>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+                else if (action == "edit_menu_author")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditBookAuthor;
+                    await botClient.SendMessage(chatId, $"✍️ Введіть НОВОГО АВТОРА:\n💡 <i>Поточний:</i> <code>{TextUtils.EscapeHtml(session.Author)}</code>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+                else if (action == "edit_menu_genre")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditBookGenre;
+                    await botClient.SendMessage(chatId, $"✍️ Введіть НОВИЙ ЖАНР:\n💡 <i>Поточний:</i> <code>{TextUtils.EscapeHtml(session.Genre)}</code>", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+                else if (action == "edit_menu_qty")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditBookQuantity;
+                    await botClient.SendMessage(chatId, $"✍️ Введіть НОВУ ЗАГАЛЬНУ КІЛЬКІСТЬ (або напишіть <code>+1</code> чи <code>-1</code>):", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+                else if (action == "edit_menu_exch")
+                {
+                    session.ExchangeStatus = session.ExchangeStatus == "Так" ? "Ні" : "Так";
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                else if (action == "edit_menu_cancel")
+                {
+                    SessionManager.ClearSession(chatId);
+                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Редагування скасовано.", cancellationToken: cancellationToken);
+                }
+                else if (action == "edit_menu_save")
+                {
+                    bool success = await LibraryDbService.UpdateBookInCatalogAsync(
+                        session.EditRowIndex,
+                        session.Title ?? "Без назви",
+                        session.Author ?? "Невідомий",
+                        session.Genre ?? "Не вказано",
+                        session.ExchangeStatus ?? "Так",
+                        session.CurrentAvailable,
+                        session.CurrentTotal);
+
+                    if (success)
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"✅ Книгу <b>{TextUtils.EscapeHtml(session.Title)}</b> успішно оновлено!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    else
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"❌ Помилка оновлення бази даних.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+
+                    SessionManager.ClearSession(chatId);
+                }
+
+                try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); } catch { }
+                return;
             }
             else if (callbackQuery.Data.StartsWith("fix_lost_"))
             {
@@ -653,20 +843,105 @@ namespace LibraryBot.Handlers
                 });
 
                 string adminMsg = $"📩 <b>НОВИЙ ЗАПИТ НА ВИДАЧУ</b>\n\n👤 Читач: <b>{TextUtils.EscapeHtml(realName)}</b>\n🔗 Профіль: {TextUtils.EscapeHtml(telegramName)}\n📞 Контакт: {TextUtils.EscapeHtml(contact)}\n📖 Книга: <b>{TextUtils.EscapeHtml(bookTitle)}</b>\n⏳ Термін: {days} днів";
+                var msgList = new List<(long, int)>();
                 foreach (var adminId in SessionManager.AdminIds)
                 {
-                    try { await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); }
+                    try 
+                    { 
+                        var msg = await botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Html, replyMarkup: adminKeyboard); 
+                        msgList.Add((adminId, msg.MessageId));
+                    }
                     catch (Exception ex) { Console.WriteLine($"[Telegram API] Не вдалося відправити запит адміну {adminId}: {ex.Message}"); }
                 }
+                SessionManager.AdminRequestMessages[request.RequestId] = msgList; // ЗБЕРІГАЄМО
 
                 SessionManager.ClearSession(chatId);
                 await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, $"⏳ Запит на книгу <b>{TextUtils.EscapeHtml(bookTitle)}</b> (на {days} днів) відправлено. Очікуйте!", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+            }
+            // ============================================================
+            // РЕДАКТУВАННЯ КНИГИ ЧЕРЕЗ МЕНЮ (edit_menu_*)
+            // ============================================================
+            else if (callbackQuery.Data.StartsWith("edit_menu_"))
+            {
+                if (!SessionManager.AdminIds.Contains(chatId)) return;
+                if (!SessionManager.AdminBookSessions.TryGetValue(chatId, out var session)) return;
+
+                if (callbackQuery.Data == "edit_menu_title")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditMenuTitleInput;
+                    await botClient.SendMessage(chatId, "📝 Введіть НОВУ НАЗВУ книги (або `-` щоб залишити без змін):", cancellationToken: cancellationToken);
+                }
+                else if (callbackQuery.Data == "edit_menu_author")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditMenuAuthorInput;
+                    await botClient.SendMessage(chatId, "👤 Введіть НОВОГО АВТОРА (або `-` щоб залишити без змін):", cancellationToken: cancellationToken);
+                }
+                else if (callbackQuery.Data == "edit_menu_genre")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditMenuGenreInput;
+                    await botClient.SendMessage(chatId, "🎭 Введіть НОВИЙ ЖАНР (або `-` щоб залишити без змін):", cancellationToken: cancellationToken);
+                }
+                else if (callbackQuery.Data == "edit_menu_qty")
+                {
+                    SessionManager.UserStates[chatId] = UserState.WaitingForEditMenuQuantityInput;
+                    await botClient.SendMessage(chatId, $"📦 Введіть нову кількість (поточно: {session.CurrentTotal}) або зміну (напр. `+1` або `-2`):", cancellationToken: cancellationToken);
+                }
+                else if (callbackQuery.Data == "edit_menu_exch")
+                {
+                    // Переключение статуса обмена
+                    session.ExchangeStatus = session.ExchangeStatus == "Так" ? "Ні" : "Так";
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, callbackQuery.Message.MessageId, cancellationToken);
+                }
+                else if (callbackQuery.Data == "edit_menu_cancel")
+                {
+                    SessionManager.ClearSession(chatId);
+                    await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Редагування скасовано.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                }
+                else if (callbackQuery.Data == "edit_menu_save")
+                {
+                    // Сохранение изменений в БД
+                    bool updated = await LibraryDbService.UpdateBookInCatalogAsync(
+                        session.EditRowIndex,
+                        session.Title ?? "",
+                        session.Author ?? "",
+                        session.Genre ?? "",
+                        session.ExchangeStatus ?? "Так",
+                        session.CurrentAvailable,
+                        session.CurrentTotal
+                    );
+
+                    SessionManager.ClearSession(chatId);
+
+                    if (updated)
+                    {
+                        string msg = $"✅ <b>Книга успішно оновлена!</b>\n\n📖 Назва: <b>{TextUtils.EscapeHtml(session.Title ?? "")}</b>\n👤 Автор: <b>{TextUtils.EscapeHtml(session.Author ?? "")}</b>\n🎭 Жанр: <b>{TextUtils.EscapeHtml(session.Genre ?? "")}</b>\n📊 Баланс: {session.CurrentAvailable} / {session.CurrentTotal}\n🔄 Обмін: <b>{session.ExchangeStatus}</b>";
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, msg, parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        await botClient.EditMessageText(chatId, callbackQuery.Message.MessageId, "❌ Помилка при оновленні книги.", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                    }
+                }
             }
 
             try { await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken); }
             catch (Exception ex) { Console.WriteLine($"[Telegram API] Помилка AnswerCallbackQuery: {ex.Message}"); }
         }
-
+        /// <summary>
+        /// Оновлює повідомлення у всіх адміністраторів одночасно (щоб усі бачили однаковий статус запиту)
+        /// </summary>
+        private static async Task UpdateAllAdminMessages(ITelegramBotClient botClient, string reqId, string newText, InlineKeyboardMarkup? keyboard = null)
+        {
+            if (SessionManager.AdminRequestMessages.TryGetValue(reqId, out var msgList))
+            {
+                foreach (var (aId, mId) in msgList)
+                {
+                    try { await botClient.EditMessageText(aId, mId, newText, parseMode: ParseMode.Html, replyMarkup: keyboard); }
+                    catch { /* Ігноруємо, якщо адмін видалив повідомлення */ }
+                }
+            }
+        }
         /// <summary>
         /// Знаходить рядок книги за стабільним Id (DbBook.Id), а не за позицією в каталозі.
         /// Так дія завжди потрапляє в потрібну книгу, навіть якщо каталог змінився між

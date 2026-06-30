@@ -160,12 +160,15 @@ namespace LibraryBot.Commands
             if (!SessionManager.AdminIds.Contains(chatId)) return;
 
             SessionManager.ClearSession(chatId);
-            SessionManager.UserStates[chatId] = UserState.WaitingForAddBookTitle;
-            SessionManager.AdminBookSessions[chatId] = new AdminBookSession();
-            await botClient.SendMessage(chatId, "📝 Введіть НАЗВУ нової книги:", cancellationToken: cancellationToken);
+
+            // ВИПРАВЛЕНО: Явно вказуємо EditRowIndex = -1
+            var session = new AdminBookSession { CurrentStep = 1, EditRowIndex = -1 };
+
+            SessionManager.AdminBookSessions[chatId] = session;
+
+            await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, null, cancellationToken);
         }
     }
-
     public class DeleteBookCommand : ICommand
     {
         public string[] Triggers => new[] { "/delete", "🗑 Видалити" };

@@ -1,10 +1,12 @@
 ﻿using LibraryBot.Models;
 using LibraryBot.Services;
 using LibraryBot.UI;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
@@ -12,114 +14,127 @@ namespace LibraryBot.Handlers
 {
     public static class AdminStateHandler
     {
-        public static async Task<bool> HandleAsync(ITelegramBotClient botClient, long chatId, string text, UserState state, CancellationToken cancellationToken)
+        public static async Task<bool> HandleAsync(ITelegramBotClient botClient, long chatId, string text, UserState state, CancellationToken cancellationToken, Message message = null)
         {
-            if (!string.IsNullOrEmpty(text) && (text.ToLower() == "/cancel" || text == "❌ Скасувати дію"))
+            if (!string.IsNullOrEmpty(text) && (text.ToLower() == "/cancel" || text == "❌ Скасувати дію" || text == "❌ Скасувати"))
             {
                 SessionManager.ClearSession(chatId);
-                await botClient.SendMessage(chatId, "Дію скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                // Убираем клавиатуру и помечаем действие как обработанное
+                await botClient.SendMessage(chatId, "ОБРОБЛЕНО\nДію скасовано.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                // Показываем главное меню
+                await botClient.SendMessage(chatId, "Меню:", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 return true;
             }
 
-            // 1. ДОДАВАННЯ КНИГИ
-            // 1. ДОДАВАННЯ КНИГИ
+            // -------------------------------------------------------------
+            // ОБРОБКА ТЕКСТОВИХ ВВЕДЕНЬ ДЛЯ МАЙСТРА ДОДАВАННЯ/РЕДАГУВАННЯ
+            // -------------------------------------------------------------
+
             if (state == UserState.WaitingForAddBookTitle)
             {
                 string newTitle = text.Trim();
                 var session = SessionManager.AdminBookSessions[chatId];
                 session.Title = newTitle;
-                session.EditRowIndex = 0; // Скидаємо індекс перед пошуком
 
-                // Завантажуємо існуючі книги для перевірки на дублікати
-                var books = await LibraryDbService.GetBooksAsync();
-                var similarBooks = new System.Collections.Generic.List<string>();
-
-                if (books != null)
+                if (session.EditRowIndex == -1)
                 {
-                    // Нормалізуємо введену назву
-                    string normalizedNew = newTitle.ToLower().Replace(" ", "").Replace("-", "").Replace("'", "").Replace("\"", "").Replace("«", "").Replace("»", "");
+                    var books = await LibraryDbService.GetBooksAsync();
+                    var similarBooks = new System.Collections.Generic.List<string>();
+                    int firstFoundId = 0;
 
-                    for (int i = 0; i < books.Count; i++)
+                    if (books != null)
                     {
-                        var row = books[i];
-                        if (row.Count > 0)
-                        {
-                            string existingTitle = row[0]?.ToString() ?? "";
-                            string normalizedExisting = existingTitle.ToLower().Replace(" ", "").Replace("-", "").Replace("'", "").Replace("\"", "").Replace("«", "").Replace("»", "");
+                        string normalizedNew = newTitle.ToLower().Replace(" ", "").Replace("-", "").Replace("'", "").Replace("\"", "").Replace("«", "").Replace("»", "");
 
-                            if (!string.IsNullOrEmpty(normalizedExisting) && !string.IsNullOrEmpty(normalizedNew))
+                        for (int i = 0; i < books.Count; i++)
+                        {
+                            var row = books[i];
+                            if (row.Count > 0)
                             {
-                                // Критерії схожості
-                                if (normalizedExisting.Contains(normalizedNew) || normalizedNew.Contains(normalizedExisting) ||
-                                    (System.Math.Abs(normalizedNew.Length - normalizedExisting.Length) <= 5 && ComputeLevenshteinDistance(normalizedNew, normalizedExisting) <= 3))
+                                string existingTitle = row[0]?.ToString() ?? "";
+                                string normalizedExisting = existingTitle.ToLower().Replace(" ", "").Replace("-", "").Replace("'", "").Replace("\"", "").Replace("«", "").Replace("»", "");
+
+                                if (!string.IsNullOrEmpty(normalizedExisting) && !string.IsNullOrEmpty(normalizedNew))
                                 {
-                                    similarBooks.Add(existingTitle);
-                                    // Зберігаємо стабільний Id найпершого збігу, щоб потім зробити йому +1
-                                    if (session.EditRowIndex == 0 && row.Count > LibraryDbService.COL_CATALOG_ID)
-                                        session.EditRowIndex = System.Convert.ToInt32(row[LibraryDbService.COL_CATALOG_ID]);
+                                    if (normalizedExisting.Contains(normalizedNew) || normalizedNew.Contains(normalizedExisting) ||
+                                        (Math.Abs(normalizedNew.Length - normalizedExisting.Length) <= 5 && ComputeLevenshteinDistance(normalizedNew, normalizedExisting) <= 3))
+                                    {
+                                        similarBooks.Add(existingTitle);
+                                        if (firstFoundId == 0 && row.Count > LibraryDbService.COL_CATALOG_ID)
+                                            firstFoundId = Convert.ToInt32(row[LibraryDbService.COL_CATALOG_ID]);
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                if (similarBooks.Count > 0)
-                {
-                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookDuplicateCheck;
-
-                    string warning = $"⚠️ <b>Знайдено схожі книги!</b>\nУ каталозі вже є (або були раніше списані) книги зі схожою назвою:\n\n";
-
-                    // Беремо унікальні та залишаємо перші 5
-                    foreach (var b in System.Linq.Enumerable.Take(System.Linq.Enumerable.Distinct(similarBooks), 5))
+                    if (similarBooks.Count > 0)
                     {
-                        warning += $"📖 {TextUtils.EscapeHtml(b)}\n";
+                        SessionManager.UserStates[chatId] = UserState.WaitingForAddBookDuplicateCheck;
+                        session.EditRowIndex = firstFoundId;
+
+                        string warning = $"⚠️ <b>Знайдено схожі книги!</b>\nУ каталозі вже є (або були раніше списані) книги зі схожою назвою:\n\n";
+                        foreach (var b in similarBooks.Distinct().Take(5))
+                        {
+                            warning += $"📖 {TextUtils.EscapeHtml(b)}\n";
+                        }
+                        warning += "\nВиберіть, що робити далі:";
+
+                        // Строим клавиатуру с отдельными кнопками для увеличения конкретной похожей книги
+                        var rows = new System.Collections.Generic.List<KeyboardButton[]>();
+                        // Кнопки для конкретных похожих книг (до 5)
+                        foreach (var b in similarBooks.Distinct().Take(5))
+                        {
+                            rows.Add(new KeyboardButton[] { $"⬆️ +1 {b}" });
+                        }
+                        // Общая кнопка добавить новую и отмена
+                        rows.Add(new KeyboardButton[] { "➕ Додати нову" });
+                        rows.Add(new KeyboardButton[] { "❌ Скасувати" });
+
+                        var kb = new ReplyKeyboardMarkup(rows.ToArray()) { ResizeKeyboard = true };
+
+                        await botClient.SendMessage(chatId, warning, parseMode: ParseMode.Html, replyMarkup: kb, cancellationToken: cancellationToken);
+                        return true;
                     }
-                    warning += "\nВиберіть, що робити далі:";
-
-                    // Створюємо 3 вертикальні кнопки за твоїм шаблоном
-                    var kb = new ReplyKeyboardMarkup(new[] {
-                        new KeyboardButton[] { "➕ Додати нову" },
-                        new KeyboardButton[] { "⬆️ Збільшити кількість на 1 у вже існуючої" },
-                        new KeyboardButton[] { "❌ Скасувати" }
-                    })
-                    { ResizeKeyboard = true };
-
-                    await botClient.SendMessage(chatId, warning, parseMode: ParseMode.Html, replyMarkup: kb, cancellationToken: cancellationToken);
-                    return true;
                 }
 
-                // Якщо схожих немає - йдемо далі
-                SessionManager.UserStates[chatId] = UserState.WaitingForAddBookAuthor;
-                await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                session.CurrentStep = 2;
+                await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
                 return true;
             }
 
-            // НОВИЙ БЛОК: Вирішення конфлікту дублікатів
             if (state == UserState.WaitingForAddBookDuplicateCheck)
             {
-                if (text == "➕ Додати нову")
-                {
-                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookAuthor;
-                    await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
-                    return true;
-                }
-                else if (text == "⬆️ Збільшити кількість на 1 у вже існуючої")
+                if (text == "➕ Додати нову" || text == "➕ Додати ще одну")
                 {
                     var session = SessionManager.AdminBookSessions[chatId];
-                    int bookId = session.EditRowIndex;
+                    session.EditRowIndex = -1;
+                    session.CurrentStep = 2;
+                    SessionManager.UserStates[chatId] = UserState.None;
 
-                    if (bookId == 0)
-                    {
-                        await botClient.SendMessage(chatId, "❌ Помилка: не вдалося знайти оригінальну книгу.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
-                        SessionManager.ClearSession(chatId);
-                        return true;
-                    }
+                    // Прибираємо Reply-клавіатуру
+                    var removeMsg = await botClient.SendMessage(chatId, "⏳ Продовжуємо...", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                    try { await botClient.DeleteMessage(chatId, removeMsg.MessageId, cancellationToken); } catch { }
 
+                    // ДОДАНО: Видаляємо старе вікно майстра, яке "поїхало" вгору
+                    try { await botClient.DeleteMessage(chatId, session.WizardMessageId, cancellationToken); } catch { }
+
+                    // ВИПРАВЛЕНО: Передаємо null замість session.WizardMessageId, 
+                    // щоб бот надіслав НОВЕ повідомлення Майстра в самий низ чату!
+                    await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, null, cancellationToken);
+                    return true;
+                }
+                else if (text.StartsWith("⬆️ +1 "))
+                {
+                    // Пользователь выбрал конкретную похожую книгу для увеличения количества
+                    string chosenTitle = text.Substring("⬆️ +1 ".Length);
+                    var session = SessionManager.AdminBookSessions[chatId];
                     var books = await LibraryDbService.GetBooksAsync();
-                    var row = books?.FirstOrDefault(b => b.Count > LibraryDbService.COL_CATALOG_ID && System.Convert.ToInt32(b[LibraryDbService.COL_CATALOG_ID]) == bookId);
+                    var row = books?.FirstOrDefault(b => b.Count > 0 && (b[0]?.ToString() ?? "") == chosenTitle);
+
                     if (row != null)
                     {
-                        // Зчитуємо всі поточні дані з рядка
+                        int bookId = row.Count > LibraryDbService.COL_CATALOG_ID ? Convert.ToInt32(row[LibraryDbService.COL_CATALOG_ID]) : 0;
                         string t = row.Count > 0 ? row[0]?.ToString() ?? "" : "";
                         string a = row.Count > 1 ? row[1]?.ToString() ?? "" : "";
                         string g = row.Count > 2 ? row[2]?.ToString() ?? "" : "";
@@ -127,8 +142,8 @@ namespace LibraryBot.Handlers
                         int ava = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int da) ? da : 0 : 0;
                         int tot = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int dt) ? dt : 1 : 1;
 
-                        // Перезаписуємо рядок, роблячи +1 до обох колонок (Доступно і Всього)
                         bool updated = await LibraryDbService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
+                        try { await botClient.DeleteMessage(chatId, session.WizardMessageId, cancellationToken); } catch { }
 
                         if (updated)
                             await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
@@ -143,10 +158,53 @@ namespace LibraryBot.Handlers
                     SessionManager.ClearSession(chatId);
                     return true;
                 }
-                else if (text == "❌ Скасувати" || text.ToLower() == "/cancel" || text == "❌ Скасувати дію")
+                else if (text == "⬆️ Збільшити кількість на 1 у вже існуючої")
+                {
+                    var session = SessionManager.AdminBookSessions[chatId];
+                    int bookId = session.EditRowIndex;
+
+                    if (bookId == 0)
+                    {
+                        // Если нет конкретного id, предложим выбрать из похожих
+                        await botClient.SendMessage(chatId, "❌ Не вдалося визначити конкретну книгу. Будь ласка, оберіть одну з перерахованих у списку, або додайте нову.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        SessionManager.ClearSession(chatId);
+                        return true;
+                    }
+
+                    var books = await LibraryDbService.GetBooksAsync();
+                    var row = books?.FirstOrDefault(b => b.Count > LibraryDbService.COL_CATALOG_ID && Convert.ToInt32(b[LibraryDbService.COL_CATALOG_ID]) == bookId);
+
+                    if (row != null)
+                    {
+                        string t = row.Count > 0 ? row[0]?.ToString() ?? "" : "";
+                        string a = row.Count > 1 ? row[1]?.ToString() ?? "" : "";
+                        string g = row.Count > 2 ? row[2]?.ToString() ?? "" : "";
+                        string e = row.Count > 3 ? row[3]?.ToString()?.Trim() ?? "Так" : "Так";
+                        int ava = row.Count > 4 ? int.TryParse(row[4]?.ToString(), out int da) ? da : 0 : 0;
+                        int tot = row.Count > 5 ? int.TryParse(row[5]?.ToString(), out int dt) ? dt : 1 : 1;
+
+                        bool updated = await LibraryDbService.UpdateBookInCatalogAsync(bookId, t, a, g, e, ava + 1, tot + 1);
+
+                        // Видаляємо старого майстра, щоб не засмічувати чат
+                        try { await botClient.DeleteMessage(chatId, session.WizardMessageId, cancellationToken); } catch { }
+
+                        if (updated)
+                            await botClient.SendMessage(chatId, $"✅ Кількість книги <b>{TextUtils.EscapeHtml(t)}</b> успішно збільшено!\n📊 Новий баланс: {tot + 1} шт. (Доступно: {ava + 1})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        else
+                            await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        await botClient.SendMessage(chatId, $"❌ Не вдалося зчитати дані з таблиці.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    }
+
+                    SessionManager.ClearSession(chatId);
+                    return true;
+                }
+                else if (text == "❌ Скасувати")
                 {
                     SessionManager.ClearSession(chatId);
-                    await botClient.SendMessage(chatId, "❌ Додавання книги скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                    await botClient.SendMessage(chatId, "Дію скасовано.", replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                     return true;
                 }
                 else
@@ -155,202 +213,195 @@ namespace LibraryBot.Handlers
                     return true;
                 }
             }
-            // НОВИЙ БЛОК: Вирішення конфлікту дублікатів
-            if (state == UserState.WaitingForAddBookDuplicateCheck)
-            {
-                if (text == "➕ Додати ще одну")
-                {
-                    SessionManager.UserStates[chatId] = UserState.WaitingForAddBookAuthor;
-                    // Прибираємо кнопки "Додати/Скасувати", щоб було зручно вводити автора
-                    await botClient.SendMessage(chatId, "👤 Введіть АВТОРА книги (або відправте `-`, якщо невідомий):", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
-                    return true;
-                }
-                else
-                {
-                    await botClient.SendMessage(chatId, "❌ Будь ласка, скористайтеся кнопками нижче:", cancellationToken: cancellationToken);
-                    return true;
-                }
-            }
+
             if (state == UserState.WaitingForAddBookAuthor)
             {
-                SessionManager.AdminBookSessions[chatId].Author = text; // Якщо ввели "-", збережеться "-"
-                SessionManager.UserStates[chatId] = UserState.WaitingForAddBookGenre;
-                await botClient.SendMessage(chatId, "🎭 Введіть ЖАНР книги (або відправте `-`, якщо немає):", cancellationToken: cancellationToken);
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Author = text;
+                    session.CurrentStep = 3;
+                    await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
                 return true;
             }
+
+            // --- НОВАЯ ЛОГИКА ТЕКСТОВОГО ВВОДА ДЛЯ МЕНЮ РЕДАКТИРОВАНИЯ ---
+            if (state == UserState.WaitingForEditBookTitle)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    session.Title = text;
+                    SessionManager.UserStates[chatId] = UserState.None; // Сбрасываем ожидание текста
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditBookAuthor)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    session.Author = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
             if (state == UserState.WaitingForAddBookGenre)
             {
-                SessionManager.AdminBookSessions[chatId].Genre = text;
-                SessionManager.UserStates[chatId] = UserState.WaitingForAddBookQuantity;
-                await botClient.SendMessage(chatId, "🔢 Введіть КІЛЬКІСТЬ примірників цієї книги (тільки цифру, наприклад 1, 2, 5):", cancellationToken: cancellationToken);
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Genre = text;
+                    session.CurrentStep = 4;
+                    await WizardHelper.SendOrUpdateWizardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
                 return true;
             }
-            if (state == UserState.WaitingForAddBookQuantity)
+
+            if (state == UserState.WaitingForEditBookGenre)
             {
-                if (!int.TryParse(text, out int qty) || qty <= 0)
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
                 {
-                    await botClient.SendMessage(chatId, "❌ Будь ласка, введіть коректне число більше нуля (наприклад: 1):", cancellationToken: cancellationToken);
-                    return true;
+                    session.Genre = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
                 }
-
-                SessionManager.AdminBookSessions[chatId].Quantity = qty;
-                SessionManager.UserStates[chatId] = UserState.WaitingForAddBookExchangeStatus;
-
-                var kb = new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Так", "Ні" }, new KeyboardButton[] { "❌ Скасувати дію" } }) { ResizeKeyboard = true };
-                await botClient.SendMessage(chatId, "🔄 Чи доступна ця книга для обміну?", replyMarkup: kb, cancellationToken: cancellationToken);
                 return true;
             }
-            if (state == UserState.WaitingForAddBookExchangeStatus)
+
+            if (state == UserState.WaitingForEditBookQuantity)
             {
-                string exchangeStatus = (text.ToLower() == "ні") ? "Ні" : "Так";
-                var session = SessionManager.AdminBookSessions[chatId];
-                int qty = session.Quantity > 0 ? session.Quantity : 1;
-
-                // Отримуємо результат: true якщо успішно, false якщо Google видав помилку
-                bool success = await LibraryDbService.AddBookToCatalogAsync(session.Title!, session.Author!, session.Genre!, exchangeStatus, qty);
-                SessionManager.ClearSession(chatId);
-
-                if (success)
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
                 {
-                    string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
-                    await botClient.SendMessage(chatId, $"✅ Книгу <b>{TextUtils.EscapeHtml(session.Title)}</b> ({qty} шт.) успішно додано!\nСтатус: {exchText}", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
-                }
-                else
-                {
-                    // Рятуємо користувача від невідомості
-                    await botClient.SendMessage(chatId, "❌ <b>Помилка на стороні сервера.</b>\nНе вдалося додати книгу. Можливо, сервіс тимчасово недоступний. Спробуйте ще раз через хвилину.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
-                }
+                    // Обработка +1, -2 или точного числа
+                    if (text.StartsWith("+") || text.StartsWith("-"))
+                    {
+                        if (int.TryParse(text, out int diff))
+                        {
+                            session.CurrentTotal += diff;
+                            session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                            SessionManager.UserStates[chatId] = UserState.None;
+                        }
+                    }
+                    else if (int.TryParse(text, out int exactQty) && exactQty >= 0)
+                    {
+                        int diff = exactQty - session.CurrentTotal;
+                        session.CurrentTotal = exactQty;
+                        session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                        SessionManager.UserStates[chatId] = UserState.None;
+                    }
 
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+
+                    if (SessionManager.UserStates[chatId] == UserState.None)
+                    {
+                        await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                    }
+                    else
+                    {
+                        var msg = await botClient.SendMessage(chatId, "❌ Введіть коректне число (наприклад `5` або `+1`).", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        _ = Task.Run(async () => { await Task.Delay(3000); try { await botClient.DeleteMessage(chatId, msg.MessageId, CancellationToken.None); } catch { } });
+                    }
+                }
                 return true;
             }
-            // 2. ВИДАЛЕННЯ КНИГИ
+
+            // --- РЕДАКТИРОВАНИЕ ЧЕРЕЗ МЕНЮ (новые обработчики) ---
+            if (state == UserState.WaitingForEditMenuTitleInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Title = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditMenuAuthorInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Author = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditMenuGenreInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    if (text != "-") session.Genre = text;
+                    SessionManager.UserStates[chatId] = UserState.None;
+                    try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                    await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                }
+                return true;
+            }
+
+            if (state == UserState.WaitingForEditMenuQuantityInput)
+            {
+                if (SessionManager.AdminBookSessions.TryGetValue(chatId, out var session))
+                {
+                    bool isValid = false;
+
+                    // Обработка +1, -2 или точного числа
+                    if (text.StartsWith("+") || text.StartsWith("-"))
+                    {
+                        if (int.TryParse(text, out int diff))
+                        {
+                            session.CurrentTotal += diff;
+                            session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                            isValid = true;
+                        }
+                    }
+                    else if (int.TryParse(text, out int exactQty) && exactQty >= 0)
+                    {
+                        int diff = exactQty - session.CurrentTotal;
+                        session.CurrentTotal = exactQty;
+                        session.CurrentAvailable = Math.Max(0, session.CurrentAvailable + diff);
+                        isValid = true;
+                    }
+
+                    if (isValid)
+                    {
+                        SessionManager.UserStates[chatId] = UserState.None;
+                        try { if (message != null) await botClient.DeleteMessage(chatId, message.MessageId, cancellationToken); } catch { }
+                        await WizardHelper.SendOrUpdateEditDashboardAsync(botClient, chatId, session, session.WizardMessageId, cancellationToken);
+                    }
+                    else
+                    {
+                        var msg = await botClient.SendMessage(chatId, "❌ Введіть коректне число (наприклад `5` або `+1`).", parseMode: ParseMode.Html, cancellationToken: cancellationToken);
+                        _ = Task.Run(async () => { await Task.Delay(3000); try { await botClient.DeleteMessage(chatId, msg.MessageId, CancellationToken.None); } catch { } });
+                    }
+                }
+                return true;
+            }
+
+            // -------------------------------------------------------------
+            // ІНШІ СТАНДАРТНІ КОМАНДИ (Видалення, Обмін, Ручна видача)
+            // -------------------------------------------------------------
+
             if (state == UserState.WaitingForDeleteSearchQuery)
             {
                 await LibraryDisplayService.SearchBooksForDeletionAsync(botClient, chatId, text, cancellationToken);
                 return true;
             }
 
-            // 3. РЕДАГУВАННЯ КНИГИ
             if (state == UserState.WaitingForEditSearchQuery)
             {
                 await LibraryDisplayService.SearchBooksForEditingAsync(botClient, chatId, text, cancellationToken);
                 return true;
             }
-            if (state == UserState.WaitingForEditBookTitle)
-            {
-                if (text != "-") SessionManager.AdminBookSessions[chatId].Title = text;
-                SessionManager.UserStates[chatId] = UserState.WaitingForEditBookAuthor;
-                string oldAuthor = SessionManager.AdminBookSessions[chatId].Author ?? "Невідомий";
-                await botClient.SendMessage(chatId, $"Введіть НОВОГО АВТОРА (або `-` щоб залишити: {oldAuthor}):", cancellationToken: cancellationToken);
-                return true;
-            }
-            if (state == UserState.WaitingForEditBookAuthor)
-            {
-                if (text != "-") SessionManager.AdminBookSessions[chatId].Author = text;
-                SessionManager.UserStates[chatId] = UserState.WaitingForEditBookGenre;
-                string oldGenre = SessionManager.AdminBookSessions[chatId].Genre ?? "Не вказано";
-                await botClient.SendMessage(chatId, $"Введіть НОВИЙ ЖАНР (або `-` щоб залишити: {oldGenre}):", cancellationToken: cancellationToken);
-                return true;
-            }
-            if (state == UserState.WaitingForEditBookGenre)
-            {
-                if (text != "-") SessionManager.AdminBookSessions[chatId].Genre = text;
-                SessionManager.UserStates[chatId] = UserState.WaitingForEditBookQuantity;
 
-                var session = SessionManager.AdminBookSessions[chatId];
-
-                // Створюємо зручну нижню клавіатуру з твоїми кнопками
-                var kb = new ReplyKeyboardMarkup(new[] 
-                { 
-                    new KeyboardButton[] { "-1", "залишити", "+1" }, 
-                    new KeyboardButton[] { "❌ Скасувати дію" } 
-                }) { ResizeKeyboard = true };
-
-                await botClient.SendMessage(chatId, $"🔢 <b>Редагування кількості примірників</b>\nЗараз у бібліотеці всього: <b>{session.CurrentTotal}</b> шт. (з них доступно для видачі: {session.CurrentAvailable})\n\nОберіть дію за допомогою кнопок або введіть точну загальну кількість вручну:", parseMode: ParseMode.Html, replyMarkup: kb, cancellationToken: cancellationToken);
-                return true;
-            }
-            // НОВИЙ БЛОК: Обробка кнопок кількості
-            if (state == UserState.WaitingForEditBookQuantity)
-            {
-                var session = SessionManager.AdminBookSessions[chatId];
-                int newTotal = session.CurrentTotal;
-                int newAvailable = session.CurrentAvailable;
-
-                if (text == "+1")
-                {
-                    newTotal += 1;
-                    newAvailable += 1; // Нова книга одразу стає доступною
-                }
-                else if (text == "-1")
-                {
-                    if (session.CurrentTotal > 0)
-                    {
-                        newTotal -= 1;
-                        // Зменшуємо доступні, але стежимо, щоб не пішло в мінус
-                        newAvailable = Math.Max(0, newAvailable - 1); 
-                    }
-                }
-                else if (text.ToLower() == "залишити" || text == "-")
-                {
-                    // Нічого не міняємо, залишаються старі значення
-                }
-                else // Якщо адмін ввів конкретну цифру руками (наприклад "5")
-                {
-                    if (!int.TryParse(text, out int parsedTotal) || parsedTotal < 0)
-                    {
-                        await botClient.SendMessage(chatId, "❌ Будь ласка, оберіть дію з кнопок або введіть коректне число примірників:", cancellationToken: cancellationToken);
-                        return true;
-                    }
-
-                    // Рахуємо різницю, щоб коректно посунути доступні книги
-                    int diff = parsedTotal - session.CurrentTotal;
-                    newTotal = parsedTotal;
-                    newAvailable = Math.Max(0, session.CurrentAvailable + diff);
-                }
-
-                // Зберігаємо прораховані значення в сесію
-                session.CurrentTotal = newTotal;
-                session.CurrentAvailable = newAvailable;
-
-                // Переходимо до фінального кроку — статус обміну
-                SessionManager.UserStates[chatId] = UserState.WaitingForEditBookExchangeStatus;
-                string oldExch = session.ExchangeStatus ?? "Так";
-                string currentChoice = oldExch == "Ні" ? "Ні" : "Так";
-
-                var kb = new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Так", "Ні", "-" }, new KeyboardButton[] { "❌ Скасувати дію" } }) { ResizeKeyboard = true };
-                await botClient.SendMessage(chatId, $"🔄 Чи доступна ця книга для обміну? (Зараз: {currentChoice})\nОберіть `Так`, `Ні` або `-` щоб залишити без змін:", replyMarkup: kb, cancellationToken: cancellationToken);
-                return true;
-            }
-
-            if (state == UserState.WaitingForEditBookExchangeStatus)
-            {
-                var session = SessionManager.AdminBookSessions[chatId];
-
-                string finalExch = session.ExchangeStatus ?? "Так";
-                if (text.ToLower() == "так") finalExch = "Так";
-                else if (text.ToLower() == "ні") finalExch = "Ні";
-
-                // Викликаємо наш новий метод і передаємо текстові поля + прораховані кількості
-                bool updated = await LibraryDbService.UpdateBookInCatalogAsync(
-                    session.EditRowIndex, 
-                    session.Title!, 
-                    session.Author!, 
-                    session.Genre!, 
-                    finalExch,
-                    session.CurrentAvailable,
-                    session.CurrentTotal
-                );
-
-                SessionManager.ClearSession(chatId);
-
-                if (updated) 
-                    await botClient.SendMessage(chatId, $"✅ Книгу <b>{TextUtils.EscapeHtml(session.Title)}</b> успішно оновлено!\n📊 Новий баланс: {session.CurrentTotal} шт. (Доступно: {session.CurrentAvailable})", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
-                else 
-                    await botClient.SendMessage(chatId, $"❌ Помилка оновлення таблиці.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
-                return true;
-            }
-
-            // 4. ОБМІН КНИГИ
             if (state == UserState.WaitingForExchangeSearchQuery)
             {
                 await LibraryDisplayService.SearchBooksForExchangeAsync(botClient, chatId, text, cancellationToken);
@@ -387,41 +438,42 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminExchangeSessions[chatId];
                 session.NewBookGenre = (text == "-") ? "Не вказано" : text;
 
-                // Переводимо у новий стан очікування відповіді щодо обміну
                 SessionManager.UserStates[chatId] = UserState.WaitingForExchangeExchangeStatus;
-
-                // Виводимо клавіатуру з кнопками вибору
                 var kb = new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Так", "Ні" }, new KeyboardButton[] { "❌ Скасувати дію" } }) { ResizeKeyboard = true };
                 await botClient.SendMessage(chatId, "🔄 Чи буде ЦЯ НОВА книга доступна для обміну в майбутньому?", replyMarkup: kb, cancellationToken: cancellationToken);
                 return true;
             }
-
-            // НОВИЙ БЛОК: Фіналізація обміну з урахуванням вибору статусу
             if (state == UserState.WaitingForExchangeExchangeStatus)
             {
                 string exchangeStatus = (text.ToLower() == "ні") ? "Ні" : "Так";
                 var session = SessionManager.AdminExchangeSessions[chatId];
 
-                // 1. Записуємо в лог обміну
-                await LibraryDbService.AddExchangeLogAsync(session.OldBookTitle, session.NewBookTitle, session.ReaderName);
+                // Виправлено можливий NULL
+                await LibraryDbService.AddExchangeLogAsync(session.OldBookTitle ?? "Невідомо", session.NewBookTitle ?? "Невідомо", session.ReaderName ?? "Невідомо");
 
-                // 2. Списуємо стару книгу з балансу за точним індексом рядка (у критичній секції книги)
                 using (await AsyncKeyedLock.LockAsync($"book:{session.OldBookRowIndex}", cancellationToken))
                 {
-                    await LibraryDbService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle);
+                    await LibraryDbService.ProcessExchangeOutgoingBookAsync(session.OldBookRowIndex, session.OldBookTitle ?? "");
                 }
 
-                // 3. Додаємо нову книгу (передаємо вибраний exchangeStatus замість захардкодженного "Так", кількість 1 шт)
-                await LibraryDbService.AddBookToCatalogAsync(session.NewBookTitle, session.NewBookAuthor, session.NewBookGenre, exchangeStatus, 1);
+                // Виправлено можливий NULL
+                await LibraryDbService.AddBookToCatalogAsync(
+                    session.NewBookTitle ?? "Без назви",
+                    session.NewBookAuthor ?? "Невідомий автор",
+                    session.NewBookGenre ?? "Не вказано",
+                    exchangeStatus,
+                    1
+                );
 
                 SessionManager.ClearSession(chatId);
 
                 string exchText = exchangeStatus == "Ні" ? "Не обмінюється" : "Можна обмінювати";
-                string successText = $"✅ <b>Обмін успішно завершено!</b>\n\n📖 Стара книга '<b>{TextUtils.EscapeHtml(session.OldBookTitle)}</b>' списана з балансу.\n✨ Нова книга '<b>{TextUtils.EscapeHtml(session.NewBookTitle)}</b>' додана до каталогу.\n📊 Статус обміну: <i>{exchText}</i>\n🗂 Запис внесено в аркуш 'Обмін'.";
+                string successText = $"✅ <b>Обмін успішно завершено!</b>\n\n📖 Стара книга '<b>{TextUtils.EscapeHtml(session.OldBookTitle ?? "")}</b>' списана з балансу.\n✨ Нова книга '<b>{TextUtils.EscapeHtml(session.NewBookTitle ?? "")}</b>' додана до каталогу.\n📊 Статус обміну: <i>{exchText}</i>\n🗂 Запис внесено в базу.";
 
                 await botClient.SendMessage(chatId, successText, parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                 return true;
-            }            // 5. РУЧНА ВИДАЧА ТА ПОВЕРНЕННЯ
+            }
+
             if (state == UserState.WaitingForManualSearchQuery)
             {
                 await LibraryDisplayService.SearchBooksForManualBorrowAsync(botClient, chatId, text, cancellationToken);
@@ -439,20 +491,26 @@ namespace LibraryBot.Handlers
                 var session = SessionManager.AdminSessions[chatId];
                 session.ReaderContact = text;
 
-                // Атомарно списуємо примірник у критичній секції книги: поки адмін вводив дані читача,
-                // інший адмін міг видати останній примірник. Видаємо борровінг ЛИШЕ якщо списання вдалося.
                 using (await AsyncKeyedLock.LockAsync($"book:{session.CatalogRowIndex}", cancellationToken))
                 {
                     if (await LibraryDbService.TryDecrementAvailableAsync(session.CatalogRowIndex))
                     {
-                        await LibraryDbService.AddBorrowingAsync(session.BookId!, session.ReaderName!, "Офлайн читач", session.ReaderContact!, 0, DateTime.Now.AddDays(30));
+                        // Виправлено можливий NULL
+                        await LibraryDbService.AddBorrowingAsync(
+                            session.BookId ?? "0",
+                            session.ReaderName ?? "Невідомий читач",
+                            "Офлайн читач",
+                            session.ReaderContact ?? "Не вказано",
+                            0,
+                            DateTime.Now.AddDays(30)
+                        );
                         SessionManager.ClearSession(chatId);
-                        await botClient.SendMessage(chatId, $"✅ Готово! Книга '<b>{TextUtils.EscapeHtml(session.BookId)}</b>' видана читачу <b>{TextUtils.EscapeHtml(session.ReaderName)}</b> ({TextUtils.EscapeHtml(session.ReaderContact)}).", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        await botClient.SendMessage(chatId, $"✅ Готово! Книга '<b>{TextUtils.EscapeHtml(session.BookId.ToString())}</b>' видана читачу <b>{TextUtils.EscapeHtml(session.ReaderName ?? "")}</b> ({TextUtils.EscapeHtml(session.ReaderContact ?? "")}).", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                     }
                     else
                     {
                         SessionManager.ClearSession(chatId);
-                        await botClient.SendMessage(chatId, $"😔 Усі примірники книги '<b>{TextUtils.EscapeHtml(session.BookId)}</b>' вже на руках — видачу не виконано.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
+                        await botClient.SendMessage(chatId, $"😔 Усі примірники книги '<b>{TextUtils.EscapeHtml(session.BookId.ToString())}</b>' вже на руках — видачу не виконано.", parseMode: ParseMode.Html, replyMarkup: KeyboardHelper.GetMenu(chatId), cancellationToken: cancellationToken);
                     }
                 }
                 return true;
@@ -466,8 +524,6 @@ namespace LibraryBot.Handlers
             return false;
         }
 
-
-        // Розумний алгоритм для пошуку помилок та одруківок
         private static int ComputeLevenshteinDistance(string s, string t)
         {
             if (string.IsNullOrEmpty(s)) return string.IsNullOrEmpty(t) ? 0 : t.Length;
@@ -481,7 +537,7 @@ namespace LibraryBot.Handlers
                 for (int j = 0; j < t.Length; j++)
                 {
                     int cost = (s[i] == t[j]) ? 0 : 1;
-                    v1[j + 1] = System.Math.Min(System.Math.Min(v1[j] + 1, v0[j + 1] + 1), v0[j] + cost);
+                    v1[j + 1] = Math.Min(Math.Min(v1[j] + 1, v0[j + 1] + 1), v0[j] + cost);
                 }
                 for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
             }
